@@ -51,6 +51,10 @@ runs:
         if (( ${+RUNNER_DEBUG} )) setopt XTRACE
 
         print ::group::Install clang-format-19
+        # Homebrew shipped ahead of the runner image: an out-of-date brew fails these
+        # bottles with "unknown install step: run". Updating first is what the error
+        # message itself asks for, and the runner disables auto-update.
+        brew update --quiet
         brew install --quiet obsproject/tools/clang-format@19
         print ::endgroup::
 
