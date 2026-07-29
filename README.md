@@ -1,59 +1,118 @@
-# OBS Plugin Template
+# Atom
 
-## Introduction
+Atom is an OBS Studio plugin for **atoms** — particles — and what you can do with them on stream.
+It adds an **Atom Emitter** source plus an **Atom Designer** window for building the look and the
+motion of an effect, with a live preview and a preset browser.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+> Status: early. The simulation, renderer, property page, designer window and preset library are in
+> place; see [Roadmap](#roadmap) for what is not.
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+## What it does
 
-## Supported Build Environments
+### Atom Emitter source
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+| | |
+|---|---|
+| **Source size** | Width and height of the emitter surface. |
+| **Emitting location** | Single spot, bounding box (even or clustered), source edges, source center, circle/ring/arc, line, or polygon/star. Every shape has its own options. |
+| **Atom Design** | Opened with the *Open Atom Designer…* button — see below. |
+| **Atom Physics** | Gravity and gravity direction, initial speed, emit angle and spread, drag, turbulence, lifetime and lifetime falloff, spin, destination endpoint, and per-atom offsets. |
 
-## Quick Start
+### Atom Physics
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+* **Gravity** — positive falls, negative rises like embers or smoke.
+* **Gravity direction** — any angle, so "gravity" can pull sideways.
+* **Lifetime + falloff** — how long an atom lives, and the curve its age follows (linear, ease in,
+  ease out, smooth, exponential, or a curve you draw).
+* **Destination endpoint** — nothing, a fixed point, or another source in the scene. Atoms can be
+  attracted, made to arrive exactly as their life runs out, or put into orbit; they can be removed
+  on arrival, and each atom can aim at a slightly scattered target.
+* **Offset** — position, angle, speed, size, lifetime, rotation, hue, brightness, opacity and spawn
+  phase variance. Zero everywhere means every atom emits identically.
+* **Extra forces** — optional wind, vortex, wander and bounds (bounce / wrap / remove) layered on
+  top, each with their own parameters.
 
-## Documentation
+### Atom Design
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+The designer is laid out like OBS' *Add Source* dialog: categories on the left, a preset grid or a
+property page on the right, and a live preview underneath.
 
-Suggested reading to get up and running:
+* **Color** — a single color, a lifetime gradient with as many stops as you like (drag to move,
+  double-click to add or recolor, right-click to remove), or a random color picked per atom.
+* **Bloom** — amount, radius and softness, from a tight light source to a diffuse puff of smoke.
+* **Size** — base size, minimum size, and an editable size-over-life curve.
+* **Trail** — streak, ribbon, comet or sparkle, with length, width, fade and segment count.
+* **Fade path** — no fade, linear, ease out, hold, **flare** (firework-style ignite → travel →
+  burnout), blink, pulse, or a curve you draw. Plus fade-in and flicker.
+* **Atom shape** — soft circle, hard circle, ring, spark, star, square, procedural smoke, or your
+  own image.
+* **Layers** — a design can hold several kinds of atom, each with its own spawn weight, so one
+  emitter can produce e.g. flames *and* sparks.
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+### Presets
 
-## GitHub Actions & CI
+Twelve built-in presets (Embers, Fire, Sparks, Firework Flare, Smoke Puff, Fog Drift, Magic Dust,
+Rune Circle, Confetti, Bubbles, Snow, Rain) with thumbnails that are simulated live rather than
+stored as images. Anything you build can be saved as your own preset; user presets are JSON files
+under the plugin's config directory and can be shared by copying the file.
 
-Default GitHub Actions workflows are available for the following repository actions:
+## Architecture
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+The plugin is deliberately split so that new capabilities are additive:
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
+```
+src/atom-core/   simulation, module registries, config model   (no OBS, no Qt)
+src/obs/         source, properties, serialization, renderer   (OBS only)
+src/ui/          designer window, editors, preview             (Qt only)
+```
 
-### Retrieving build artifacts
+Two ideas do most of the work:
 
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
+**Module registries.** Emitter shapes, forces, atom shapes, trail styles, fade paths, lifetime
+falloffs and endpoint providers are all entries in a `Registry<Interface>`, each carrying a
+`ModuleInfo` with a parameter schema. Registering one makes it appear in the OBS property page, in
+the designer, and in saved settings — no UI or serialization code to touch. See
+`registerBuiltinModules()` in `src/atom-core/atom-modules.cpp` for the pattern.
 
-### Building a Release
+**Field tables.** Config structs describe themselves once, in `src/atom-core/atom-config.cpp`, as a
+list of `FieldBinding`s. The property page, the designer widgets and the settings serializer are
+all generated from those tables, so a new option is one binding plus one locale string.
 
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
+Because `atom-core` knows nothing about OBS, the designer's preview runs the *same* simulation and
+the same `DesignEvaluator` as the rendered source — what you see in the preview is what goes out.
 
-## Signing and Notarizing on macOS
+## Building
 
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+Standard [obs-plugintemplate](https://github.com/obsproject/obs-plugintemplate) build. Qt and the
+frontend API are required (both are on by default) because of the designer window.
+
+| Platform | Tooling |
+|---|---|
+| Windows | Visual Studio 17 2022, CMake 3.30.5 |
+| macOS | Xcode 16, CMake 3.30.5 |
+| Ubuntu 24.04 | CMake 3.28.3, `ninja-build`, `pkg-config`, `build-essential` |
+
+```sh
+cmake --preset ubuntu-x86_64      # or windows-x64 / macos
+cmake --build --preset ubuntu-x86_64
+```
+
+The build scripts in `.github/scripts` and the workflows in `.github/workflows` come from the
+template and build the plugin on all three platforms.
+
+## Roadmap
+
+Known gaps, roughly in priority order:
+
+* Bloom is a per-atom additive glow quad rather than a full-screen post-process, and trails are
+  drawn as stretched sprite quads rather than a proper ribbon mesh.
+* The endpoint "source in a scene" mode resolves the first scene that contains both the emitter and
+  the target; an emitter used in several scenes at once picks the first match.
+* Sub-frame emission is not interpolated, so very high rates at low frame rates emit in visible
+  clumps.
+* No audio reactivity, no collision against other sources, no sprite-sheet animation.
+* Only `en-US` translations so far.
+
+## License
+
+GPL-2.0-or-later, matching OBS Studio. See [LICENSE](LICENSE).
