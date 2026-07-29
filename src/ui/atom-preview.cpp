@@ -264,6 +264,8 @@ QSize AtomPreview::sizeHint() const
 
 void AtomPreview::setConfig(const EmitterConfig &config)
 {
+	base_ = config;
+	modulation_.setRoutes(config.modulation);
 	system_->configure(config);
 	update();
 }
@@ -295,8 +297,17 @@ void AtomPreview::tick()
 	if (!playing_ || !isVisible())
 		return;
 
+	const float dt = std::min(elapsed, 0.05f);
+	time_ += dt;
+
+	ModContext modContext;
+	modContext.time = time_;
+	modContext.dt = dt;
+	if (modulation_.apply(base_, modContext, modulated_))
+		system_->setModulatedConfig(modulated_);
+
 	SimContext context;
-	system_->update(std::min(elapsed, 0.05f), context);
+	system_->update(dt, context);
 	update();
 }
 

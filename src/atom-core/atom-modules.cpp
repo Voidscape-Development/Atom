@@ -17,6 +17,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
 #include "atom-modules.hpp"
+#include "atom-modulation.hpp"
 #include "atom-noise.hpp"
 
 namespace atom {
@@ -524,6 +525,194 @@ private:
 	std::string modeId_ = "bounce";
 	float bounce_ = 0.5f;
 	float margin_ = 0.0f;
+};
+
+/// Bounces, kills or sticks atoms against the scene objects the host tracks.
+class SourceCollisionBehavior : public Behavior {
+public:
+	void configure(const ParamBag &params) override
+	{
+		modeId_ = params.getString("mode", "bounce");
+		bounce_ = params.getFloat("bounce", 0.45f);
+		friction_ = params.getFloat("friction", 0.25f);
+		margin_ = params.getFloat("margin", 0.0f);
+	}
+
+	void apply(Atom &atom, float dt, const SimContext &context) override
+	{
+		(void)dt;
+		if (context.objects.empty())
+			return;
+
+		for (const SceneObject &object : context.objects) {
+			Vec2 normal;
+			const float distance = object.distance(atom.pos, normal) - margin_;
+			if (distance > 0.0f)
+				continue;
+
+			if (modeId_ == "kill") {
+				atom.expired = true;
+				return;
+			}
+
+			// Push back out along the surface normal, then resolve the velocity.
+			atom.pos += normal * (-distance + 0.01f);
+
+			if (modeId_ == "stick") {
+				atom.vel = Vec2{0.0f, 0.0f};
+				continue;
+			}
+
+			const float into = atom.vel.x * normal.x + atom.vel.y * normal.y;
+			if (into >= 0.0f)
+				continue;
+
+			const Vec2 normalPart = normal * into;
+			const Vec2 tangentPart = atom.vel - normalPart;
+
+			if (modeId_ == "slide")
+				atom.vel = tangentPart * (1.0f - saturate(friction_));
+			else
+				atom.vel = tangentPart * (1.0f - saturate(friction_)) - normalPart * saturate(bounce_);
+		}
+	}
+
+private:
+	std::string modeId_ = "bounce";
+	float bounce_ = 0.45f;
+	float friction_ = 0.25f;
+	float margin_ = 0.0f;
+};
+
+/// Pulls atoms toward (or pushes them away from) the tracked scene objects.
+class SourceAttractBehavior : public Behavior {
+public:
+	void configure(const ParamBag &params) override
+	{
+		strength_ = params.getFloat("strength", 300.0f);
+		falloff_ = params.getFloat("falloff", 250.0f);
+		swirl_ = params.getFloat("swirl", 0.0f);
+		range_ = params.getFloat("range", 0.0f);
+	}
+
+	void apply(Atom &atom, float dt, const SimContext &context) override
+	{
+		for (const SceneObject &object : context.objects) {
+			const Vec2 delta = object.center - atom.pos;
+			const float distance = delta.length();
+			if (distance < 1e-3f)
+				continue;
+			if (range_ > 0.0f && distance > range_)
+				continue;
+
+			const Vec2 direction = delta * (1.0f / distance);
+			const float attenuation = falloff_ > 0.0f ? 1.0f / (1.0f + distance / falloff_) : 1.0f;
+
+			atom.vel += direction * (strength_ * attenuation * dt);
+			if (swirl_ != 0.0f)
+				atom.vel += Vec2{-direction.y, direction.x} * (swirl_ * attenuation * dt);
+		}
+	}
+
+private:
+	float strength_ = 300.0f;
+	float falloff_ = 250.0f;
+	float swirl_ = 0.0f;
+	float range_ = 0.0f;
+};
+
+// ---------------------------------------------------------------------------------------------
+// Modulators
+// ---------------------------------------------------------------------------------------------
+
+/// Reads a band of the level the host measured this frame.
+class AudioModulator : public Modulator {
+public:
+	void configure(const ParamBag &params) override
+	{
+		band_ = params.getString("band", "level");
+		gain_ = params.getFloat("gain", 1.0f);
+		floor_ = params.getFloat("floor", 0.0f);
+		ceiling_ = params.getFloat("ceiling", 1.0f);
+		invert_ = params.getBool("invert", false);
+	}
+
+	float value(const ModContext &context) override
+	{
+		if (!context.audio.valid)
+			return invert_ ? 1.0f : 0.0f;
+
+		const float raw = context.audio.band(band_) * gain_;
+		const float span = std::max(1e-4f, ceiling_ - floor_);
+		const float mapped = saturate((raw - floor_) / span);
+		return invert_ ? 1.0f - mapped : mapped;
+	}
+
+private:
+	std::string band_ = "level";
+	float gain_ = 1.0f;
+	float floor_ = 0.0f;
+	float ceiling_ = 1.0f;
+	bool invert_ = false;
+};
+
+class LfoModulator : public Modulator {
+public:
+	void configure(const ParamBag &params) override
+	{
+		rate_ = params.getFloat("rate", 0.5f);
+		shape_ = params.getString("shape", "sine");
+		phase_ = params.getFloat("phase", 0.0f);
+	}
+
+	float value(const ModContext &context) override
+	{
+		const float t = std::fmod(context.time * rate_ + phase_, 1.0f);
+		if (shape_ == "triangle")
+			return 1.0f - std::abs(t * 2.0f - 1.0f);
+		if (shape_ == "square")
+			return t < 0.5f ? 1.0f : 0.0f;
+		if (shape_ == "saw")
+			return t;
+		return 0.5f + 0.5f * std::sin(t * kTwoPi);
+	}
+
+private:
+	float rate_ = 0.5f;
+	std::string shape_ = "sine";
+	float phase_ = 0.0f;
+};
+
+class NoiseModulator : public Modulator {
+public:
+	void configure(const ParamBag &params) override
+	{
+		rate_ = params.getFloat("rate", 1.0f);
+		seed_ = static_cast<float>(params.getInt("seed", 1));
+	}
+
+	float value(const ModContext &context) override
+	{
+		return saturate(noise::value3(context.time * rate_, seed_, 0.0f));
+	}
+
+private:
+	float rate_ = 1.0f;
+	float seed_ = 1.0f;
+};
+
+class ConstantModulator : public Modulator {
+public:
+	void configure(const ParamBag &params) override { value_ = params.getFloat("value", 1.0f); }
+
+	float value(const ModContext &context) override
+	{
+		(void)context;
+		return value_;
+	}
+
+private:
+	float value_ = 1.0f;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1095,6 +1284,26 @@ void registerBehaviors()
 			       pFloat("frequency", "Atom.Behavior.Frequency", 1.2, 0.0, 20.0, 0.05, "Hz")}),
 		     [] { return std::make_unique<WanderBehavior>(); });
 
+	registry.add(makeInfo("source_collision", "Atom.Behavior.Collision", "Atom.Behavior.Collision.Description",
+			      "rule", 50,
+			      {pEnum("mode", "Atom.Behavior.CollisionMode", "bounce",
+				     {{"bounce", "Atom.Behavior.CollisionMode.Bounce"},
+				      {"slide", "Atom.Behavior.CollisionMode.Slide"},
+				      {"stick", "Atom.Behavior.CollisionMode.Stick"},
+				      {"kill", "Atom.Behavior.CollisionMode.Kill"}}),
+			       pFloat("bounce", "Atom.Behavior.Bounciness", 0.45, 0.0, 1.0, 0.01),
+			       pFloat("friction", "Atom.Behavior.Friction", 0.25, 0.0, 1.0, 0.01),
+			       pFloat("margin", "Atom.Behavior.Margin", 0.0, -200.0, 200.0, 1.0, "px")}),
+		     [] { return std::make_unique<SourceCollisionBehavior>(); });
+
+	registry.add(makeInfo("source_attract", "Atom.Behavior.SourceAttract",
+			      "Atom.Behavior.SourceAttract.Description", "force", 60,
+			      {pFloat("strength", "Atom.Behavior.Strength", 300.0, -4000.0, 4000.0, 1.0),
+			       pFloat("falloff", "Atom.Behavior.Falloff", 250.0, 0.0, 4000.0, 1.0, "px"),
+			       pFloat("swirl", "Atom.Behavior.Swirl", 0.0, -4000.0, 4000.0, 1.0),
+			       pFloat("range", "Atom.Behavior.Range", 0.0, 0.0, 8000.0, 1.0, "px")}),
+		     [] { return std::make_unique<SourceAttractBehavior>(); });
+
 	registry.add(makeInfo("bounds", "Atom.Behavior.Bounds", "Atom.Behavior.Bounds.Description", "rule", 40,
 			      {pEnum("mode", "Atom.Behavior.BoundsMode", "bounce",
 				     {{"bounce", "Atom.Behavior.BoundsMode.Bounce"},
@@ -1230,6 +1439,43 @@ void registerFalloffs()
 		     [] { return std::make_unique<CustomFalloff>(); });
 }
 
+void registerModulators()
+{
+	auto &registry = ModulatorRegistry::instance();
+
+	registry.add(makeInfo("audio", "Atom.Modulator.Audio", "Atom.Modulator.Audio.Description", "basic", 10,
+			      {pEnum("band", "Atom.Modulator.Band", "level",
+				     {{"level", "Atom.Modulator.Band.Level"},
+				      {"peak", "Atom.Modulator.Band.Peak"},
+				      {"low", "Atom.Modulator.Band.Low"},
+				      {"mid", "Atom.Modulator.Band.Mid"},
+				      {"high", "Atom.Modulator.Band.High"}}),
+			       pFloat("gain", "Atom.Modulator.Gain", 1.0, 0.0, 16.0, 0.05),
+			       pFloat("floor", "Atom.Modulator.Floor", 0.0, 0.0, 1.0, 0.01),
+			       pFloat("ceiling", "Atom.Modulator.Ceiling", 1.0, 0.0, 1.0, 0.01),
+			       pBool("invert", "Atom.Modulator.Invert", false)}),
+		     [] { return std::make_unique<AudioModulator>(); });
+
+	registry.add(makeInfo("lfo", "Atom.Modulator.Lfo", "Atom.Modulator.Lfo.Description", "basic", 20,
+			      {pFloat("rate", "Atom.Modulator.Rate", 0.5, 0.01, 30.0, 0.01, "Hz"),
+			       pEnum("shape", "Atom.Modulator.Shape", "sine",
+				     {{"sine", "Atom.Modulator.Shape.Sine"},
+				      {"triangle", "Atom.Modulator.Shape.Triangle"},
+				      {"square", "Atom.Modulator.Shape.Square"},
+				      {"saw", "Atom.Modulator.Shape.Saw"}}),
+			       pFloat("phase", "Atom.Modulator.Phase", 0.0, 0.0, 1.0, 0.01)}),
+		     [] { return std::make_unique<LfoModulator>(); });
+
+	registry.add(makeInfo("noise", "Atom.Modulator.Noise", "Atom.Modulator.Noise.Description", "basic", 30,
+			      {pFloat("rate", "Atom.Modulator.Rate", 1.0, 0.01, 30.0, 0.01, "Hz"),
+			       pInt("seed", "Atom.Modulator.Seed", 1, 0, 9999)}),
+		     [] { return std::make_unique<NoiseModulator>(); });
+
+	registry.add(makeInfo("constant", "Atom.Modulator.Constant", "Atom.Modulator.Constant.Description", "basic", 40,
+			      {pFloat("value", "Atom.Modulator.Value", 1.0, 0.0, 1.0, 0.01)}),
+		     [] { return std::make_unique<ConstantModulator>(); });
+}
+
 void registerEndpoints()
 {
 	auto &registry = EndpointRegistry::instance();
@@ -1260,6 +1506,7 @@ void registerBuiltinModules()
 	registerFadePaths();
 	registerFalloffs();
 	registerEndpoints();
+	registerModulators();
 }
 
 namespace {
@@ -1290,6 +1537,8 @@ std::vector<std::pair<std::string, std::string>> registryEnumItems(const std::st
 		return itemsOf<LifetimeFalloff>();
 	if (registryName == registries::kEndpoint)
 		return itemsOf<EndpointProvider>();
+	if (registryName == registries::kModulator)
+		return itemsOf<Modulator>();
 	return {};
 }
 
@@ -1309,6 +1558,8 @@ ParamSchema registrySchema(const std::string &registryName, const std::string &e
 		return FalloffRegistry::instance().schemaFor(entryId);
 	if (registryName == registries::kEndpoint)
 		return EndpointRegistry::instance().schemaFor(entryId);
+	if (registryName == registries::kModulator)
+		return ModulatorRegistry::instance().schemaFor(entryId);
 	return {};
 }
 

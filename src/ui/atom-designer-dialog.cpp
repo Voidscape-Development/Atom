@@ -207,12 +207,29 @@ AtomDesignerDialog::AtomDesignerDialog(obs_source_t *source, QWidget *parent) : 
 	addPage("size", buildLayerSectionPage("size", false, {}, {}));
 	addPage("trail", buildLayerSectionPage("trail", true, registries::kTrail, "trail_style"));
 	addPage("fade", buildLayerSectionPage("fade", true, registries::kFadePath, "fade_path"));
+	addPage("sheet", buildLayerSectionPage("sheet", false, {}, {}));
 	addPage("emission", buildEmissionPage());
 	addPage("motion", buildPhysicsSectionPage("motion", false));
 	addPage("life", buildPhysicsSectionPage("life", true));
 	addPage("endpoint", buildPhysicsSectionPage("endpoint", false));
 	addPage("offset", buildPhysicsSectionPage("offset", false));
 	addPage("forces", buildForcesPage());
+	addPage("render",
+		buildBagPage(
+			schemaOf(renderFields()), [this] { return toBag(config_.render, renderFields()); },
+			[this](const ParamBag &bag, const QString &) { fromBag(config_.render, bag, renderFields()); },
+			false));
+	addPage("scene",
+		buildBagPage(
+			schemaOf(sceneFields()), [this] { return toBag(config_.scene, sceneFields()); },
+			[this](const ParamBag &bag, const QString &) { fromBag(config_.scene, bag, sceneFields()); },
+			false));
+	addPage("audio",
+		buildBagPage(
+			schemaOf(audioFields()), [this] { return toBag(config_.audio, audioFields()); },
+			[this](const ParamBag &bag, const QString &) { fromBag(config_.audio, bag, audioFields()); },
+			true));
+	addPage("modulation", buildModulationPage());
 
 	buildSidebar();
 
@@ -271,6 +288,7 @@ void AtomDesignerDialog::buildSidebar()
 	addItem(text("Atom.Designer.Page.Size"), "size", {});
 	addItem(text("Atom.Designer.Page.Trail"), "trail", {});
 	addItem(text("Atom.Designer.Page.Fade"), "fade", {});
+	addItem(text("Atom.Designer.Page.Sheet"), "sheet", {});
 
 	sidebar_->addItem(makeHeaderItem(text("Atom.Designer.Section.Physics")));
 	addItem(text("Atom.Designer.Page.Emission"), "emission", {});
@@ -279,6 +297,12 @@ void AtomDesignerDialog::buildSidebar()
 	addItem(text("Atom.Designer.Page.Endpoint"), "endpoint", {});
 	addItem(text("Atom.Designer.Page.Offset"), "offset", {});
 	addItem(text("Atom.Designer.Page.Forces"), "forces", {});
+
+	sidebar_->addItem(makeHeaderItem(text("Atom.Designer.Section.Reactivity")));
+	addItem(text("Atom.Designer.Page.Render"), "render", {});
+	addItem(text("Atom.Designer.Page.Scene"), "scene", {});
+	addItem(text("Atom.Designer.Page.Audio"), "audio", {});
+	addItem(text("Atom.Designer.Page.Modulation"), "modulation", {});
 }
 
 void AtomDesignerDialog::onSidebarChanged()
@@ -659,6 +683,157 @@ QWidget *AtomDesignerDialog::buildPhysicsSectionPage(const std::string &group, b
 	return wrapInScrollArea(content);
 }
 
+QWidget *AtomDesignerDialog::buildBagPage(const ParamSchema &schema, std::function<ParamBag()> read,
+					  std::function<void(const ParamBag &, const QString &)> write,
+					  bool needsSourceNames)
+{
+	QWidget *content = new QWidget();
+	QVBoxLayout *layout = new QVBoxLayout(content);
+
+	ParamEditor *editor = new ParamEditor(content);
+	layout->addWidget(editor);
+	layout->addStretch(1);
+
+	const auto refresh = [this, editor, schema, read, needsSourceNames] {
+		updating_ = true;
+		if (needsSourceNames)
+			editor->setSourceNames(audioSourceNames());
+		editor->setSchema(schema, read());
+		updating_ = false;
+	};
+
+	connect(editor, &ParamEditor::valueChanged, this, [this, editor, write](const QString &id) {
+		if (updating_)
+			return;
+		write(editor->values(), id);
+		configChanged();
+	});
+
+	sectionRefreshers_.push_back(refresh);
+	return wrapInScrollArea(content);
+}
+
+QWidget *AtomDesignerDialog::buildModulationPage()
+{
+	QWidget *page = new QWidget();
+	QHBoxLayout *layout = new QHBoxLayout(page);
+
+	routesList_ = new QListWidget(page);
+	routesList_->setFixedWidth(260);
+
+	QPushButton *add = new QPushButton(text("Atom.Designer.AddRoute"), page);
+	QPushButton *remove = new QPushButton(text("Atom.Designer.RemoveRoute"), page);
+
+	QVBoxLayout *listLayout = new QVBoxLayout();
+	listLayout->addWidget(routesList_, 1);
+	listLayout->addWidget(add);
+	listLayout->addWidget(remove);
+
+	ParamEditor *editor = new ParamEditor(page);
+	ParamEditor *modulatorEditor = new ParamEditor(page);
+
+	QWidget *content = new QWidget();
+	QVBoxLayout *contentLayout = new QVBoxLayout(content);
+	contentLayout->addWidget(editor);
+
+	QGroupBox *box = new QGroupBox(text("Atom.Designer.ModulatorOptions"), content);
+	QVBoxLayout *boxLayout = new QVBoxLayout(box);
+	boxLayout->addWidget(modulatorEditor);
+	contentLayout->addWidget(box);
+	contentLayout->addStretch(1);
+
+	layout->addLayout(listLayout);
+	layout->addWidget(wrapInScrollArea(content), 1);
+
+	const auto selectedIndex = [this]() -> int {
+		QListWidgetItem *item = routesList_->currentItem();
+		return item ? item->data(Qt::UserRole).toInt() : -1;
+	};
+
+	const auto refreshEditors = [this, editor, modulatorEditor, selectedIndex] {
+		const int index = selectedIndex();
+		updating_ = true;
+		if (index >= 0 && index < static_cast<int>(config_.modulation.size())) {
+			const ModulationRoute &route = config_.modulation[static_cast<size_t>(index)];
+			editor->setSchema(schemaOf(routeFields()), toBag(route, routeFields()));
+			modulatorEditor->setSchema(registrySchema(registries::kModulator, route.modulatorId),
+						   route.modulatorParams);
+		} else {
+			editor->setSchema({}, {});
+			modulatorEditor->setSchema({}, {});
+		}
+		updating_ = false;
+	};
+
+	connect(routesList_, &QListWidget::currentItemChanged, this, [refreshEditors] { refreshEditors(); });
+	connect(routesList_, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+		if (updating_ || !item)
+			return;
+		const int index = item->data(Qt::UserRole).toInt();
+		if (index < 0 || index >= static_cast<int>(config_.modulation.size()))
+			return;
+		config_.modulation[static_cast<size_t>(index)].enabled = item->checkState() == Qt::Checked;
+		configChanged();
+	});
+	connect(editor, &ParamEditor::valueChanged, this,
+		[this, editor, modulatorEditor, selectedIndex](const QString &id) {
+			const int index = selectedIndex();
+			if (updating_ || index < 0 || index >= static_cast<int>(config_.modulation.size()))
+				return;
+
+			ModulationRoute &route = config_.modulation[static_cast<size_t>(index)];
+			fromBag(route, editor->values(), routeFields());
+
+			if (id == "modulator") {
+				route.modulatorParams.clear();
+				route.modulatorParams.applyDefaults(
+					registrySchema(registries::kModulator, route.modulatorId));
+				modulatorEditor->setSchema(registrySchema(registries::kModulator, route.modulatorId),
+							   route.modulatorParams);
+			}
+			refreshRoutesList();
+			configChanged();
+		});
+	connect(modulatorEditor, &ParamEditor::valueChanged, this,
+		[this, modulatorEditor, selectedIndex](const QString &) {
+			const int index = selectedIndex();
+			if (updating_ || index < 0 || index >= static_cast<int>(config_.modulation.size()))
+				return;
+			config_.modulation[static_cast<size_t>(index)].modulatorParams = modulatorEditor->values();
+			configChanged();
+		});
+
+	connect(add, &QPushButton::clicked, this, [this, refreshEditors] {
+		ModulationRoute route;
+		route.modulatorId = ModulatorRegistry::instance().defaultId();
+		route.modulatorParams.applyDefaults(registrySchema(registries::kModulator, route.modulatorId));
+		if (!modulationTargets().empty())
+			route.target = modulationTargets().front().first;
+		config_.modulation.push_back(std::move(route));
+
+		refreshRoutesList();
+		routesList_->setCurrentRow(routesList_->count() - 1);
+		refreshEditors();
+		configChanged();
+	});
+	connect(remove, &QPushButton::clicked, this, [this, selectedIndex, refreshEditors] {
+		const int index = selectedIndex();
+		if (index < 0 || index >= static_cast<int>(config_.modulation.size()))
+			return;
+		config_.modulation.erase(config_.modulation.begin() + static_cast<long>(index));
+		refreshRoutesList();
+		refreshEditors();
+		configChanged();
+	});
+
+	modulationPageRefresh_ = [this, refreshEditors] {
+		refreshRoutesList();
+		refreshEditors();
+	};
+
+	return page;
+}
+
 QWidget *AtomDesignerDialog::buildForcesPage()
 {
 	QWidget *page = new QWidget();
@@ -810,6 +985,43 @@ void AtomDesignerDialog::refreshForcesList()
 	updating_ = false;
 }
 
+void AtomDesignerDialog::refreshRoutesList()
+{
+	if (!routesList_)
+		return;
+
+	updating_ = true;
+	const int previous = routesList_->currentRow();
+	routesList_->clear();
+
+	for (size_t i = 0; i < config_.modulation.size(); ++i) {
+		const ModulationRoute &route = config_.modulation[i];
+		const ModuleInfo *info = ModulatorRegistry::instance().info(route.modulatorId);
+
+		// "Audio -> Emission Rate" reads better in a list than an id ever will.
+		QString targetLabel = QString::fromStdString(route.target);
+		for (const auto &target : modulationTargets()) {
+			if (target.first == route.target) {
+				targetLabel = text(target.second);
+				break;
+			}
+		}
+
+		QListWidgetItem *item = new QListWidgetItem(
+			QString("%1 \u2192 %2")
+				.arg(info ? text(info->label) : QString::fromStdString(route.modulatorId),
+				     targetLabel));
+		item->setData(Qt::UserRole, static_cast<int>(i));
+		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+		item->setCheckState(route.enabled ? Qt::Checked : Qt::Unchecked);
+		routesList_->addItem(item);
+	}
+
+	if (previous >= 0 && previous < routesList_->count())
+		routesList_->setCurrentRow(previous);
+	updating_ = false;
+}
+
 void AtomDesignerDialog::refreshPresetGrid()
 {
 	if (!presetGrid_)
@@ -859,6 +1071,8 @@ void AtomDesignerDialog::refreshAllPages()
 		layerPageRefresh_();
 	if (forcesPageRefresh_)
 		forcesPageRefresh_();
+	if (modulationPageRefresh_)
+		modulationPageRefresh_();
 }
 
 void AtomDesignerDialog::refreshPreview()
@@ -973,6 +1187,24 @@ void AtomDesignerDialog::reloadFromSource()
 
 	refreshAllPages();
 	refreshPreview();
+}
+
+QStringList AtomDesignerDialog::audioSourceNames() const
+{
+	QStringList names;
+	obs_enum_sources(
+		[](void *param, obs_source_t *source) {
+			QStringList *list = static_cast<QStringList *>(param);
+			if ((obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) == 0)
+				return true;
+			const char *name = obs_source_get_name(source);
+			if (name && *name)
+				list->append(QString::fromUtf8(name));
+			return true;
+		},
+		&names);
+	names.sort(Qt::CaseInsensitive);
+	return names;
 }
 
 QStringList AtomDesignerDialog::videoSourceNames() const

@@ -40,6 +40,13 @@ struct AtomVisual {
 	bool additive = true;
 	/// Normalized age after lifetime falloff shaping, for anything else the backend wants to vary.
 	float shapedAge = 0.0f;
+
+	/// Sub-rectangle of the sprite texture to draw, for sprite-sheet frames. Defaults to the
+	/// whole texture.
+	float u0 = 0.0f;
+	float v0 = 0.0f;
+	float u1 = 1.0f;
+	float v1 = 1.0f;
 };
 
 /// Turns atoms plus a design into drawable values.
@@ -55,7 +62,11 @@ public:
 	DesignEvaluator &operator=(const DesignEvaluator &) = delete;
 
 	/// Rebuilds the cached modules. Call whenever the design or physics config changes.
-	void rebuild(const AtomDesign &design, const PhysicsConfig &physics);
+	void rebuild(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render);
+
+	/// Updates the values the evaluator reads without recreating any module. Used when only
+	/// numbers changed, which is what modulation does every frame.
+	void refreshValues(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render);
 
 	AtomVisual evaluate(const Atom &atom) const;
 
@@ -75,6 +86,7 @@ private:
 
 	AtomDesign design_;
 	PhysicsConfig physics_;
+	RenderConfig render_;
 	std::vector<LayerModules> modules_;
 	std::unique_ptr<LifetimeFalloff> falloff_;
 };

@@ -75,6 +75,10 @@ private:
 	QWidget *buildLayerSectionPage(const std::string &group, bool withModuleParams, const std::string &registryName,
 				       const std::string &moduleSelectorId);
 	QWidget *buildEmissionPage();
+	/// Generic page over any field table, reading and writing through the given accessors.
+	QWidget *buildBagPage(const ParamSchema &schema, std::function<ParamBag()> read,
+			      std::function<void(const ParamBag &, const QString &)> write, bool needsSourceNames);
+	QWidget *buildModulationPage();
 	QWidget *buildPhysicsSectionPage(const std::string &group, bool withFalloffParams);
 	QWidget *buildForcesPage();
 	void buildSidebar();
@@ -84,6 +88,7 @@ private:
 	void refreshAllPages();
 	void refreshLayerList();
 	void refreshForcesList();
+	void refreshRoutesList();
 	void refreshPresetGrid();
 	void refreshPreview();
 	void configChanged();
@@ -92,6 +97,7 @@ private:
 	void saveCurrentAsPreset();
 	void deleteSelectedPreset();
 	QStringList videoSourceNames() const;
+	QStringList audioSourceNames() const;
 
 	obs_weak_source_t *weakSource_ = nullptr;
 	/// Working copy; written back to the source on apply.
@@ -108,6 +114,7 @@ private:
 	QListWidget *presetGrid_ = nullptr;
 	QListWidget *layerList_ = nullptr;
 	QListWidget *forcesList_ = nullptr;
+	QListWidget *routesList_ = nullptr;
 	QPointer<AtomPreview> preview_;
 	QCheckBox *liveApply_ = nullptr;
 	QPushButton *deletePreset_ = nullptr;
@@ -116,6 +123,7 @@ private:
 	std::vector<std::function<void()>> sectionRefreshers_;
 	std::function<void()> layerPageRefresh_;
 	std::function<void()> forcesPageRefresh_;
+	std::function<void()> modulationPageRefresh_;
 
 	std::map<std::string, int> pageIndex_;
 	/// Simulated preset thumbnails, kept for the lifetime of the window.

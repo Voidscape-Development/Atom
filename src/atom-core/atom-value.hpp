@@ -31,6 +31,8 @@ namespace atom {
 struct GradientStop {
 	float t = 0.0f;
 	Color color;
+
+	bool operator==(const GradientStop &o) const { return t == o.t && color == o.color; }
 };
 
 /// Multi-stop colour ramp evaluated over an atom's lifetime.
@@ -43,12 +45,17 @@ struct Gradient {
 
 	/// Keeps stops ordered by `t`; call after any edit that can reorder them.
 	void sort();
+
+	bool operator==(const Gradient &o) const { return stops == o.stops; }
+	bool operator!=(const Gradient &o) const { return !(*this == o); }
 };
 
 /// A point on an editable response curve.
 struct CurvePoint {
 	float t = 0.0f;
 	float value = 0.0f;
+
+	bool operator==(const CurvePoint &o) const { return t == o.t && value == o.value; }
 };
 
 /// Piecewise-linear curve used for size-over-life, fade paths, emission-rate shaping, etc.
@@ -61,6 +68,9 @@ struct Curve {
 
 	float sample(float t) const;
 	void sort();
+
+	bool operator==(const Curve &o) const { return points == o.points; }
+	bool operator!=(const Curve &o) const { return !(*this == o); }
 };
 
 /// Every value an Atom module can be configured with. Adding a new kind here is the only change

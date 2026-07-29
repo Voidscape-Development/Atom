@@ -81,6 +81,9 @@ struct Vec2 {
 		return *this;
 	}
 
+	bool operator==(const Vec2 &o) const { return x == o.x && y == o.y; }
+	bool operator!=(const Vec2 &o) const { return !(*this == o); }
+
 	float length() const { return std::sqrt(x * x + y * y); }
 	float lengthSquared() const { return x * x + y * y; }
 
@@ -128,6 +131,9 @@ struct Color {
 		};
 		return q(r) | (q(g) << 8) | (q(b) << 16) | (q(a) << 24);
 	}
+
+	bool operator==(const Color &o) const { return r == o.r && g == o.g && b == o.b && a == o.a; }
+	bool operator!=(const Color &o) const { return !(*this == o); }
 
 	Color operator*(float s) const { return {r * s, g * s, b * s, a * s}; }
 	Color modulate(const Color &o) const { return {r * o.r, g * o.g, b * o.b, a * o.a}; }

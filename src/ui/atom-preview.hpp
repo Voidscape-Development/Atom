@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
+#include "atom-core/atom-modulation.hpp"
 #include "atom-core/atom-system.hpp"
 
 #include <QImage>
@@ -64,6 +65,12 @@ private:
 	void tick();
 
 	std::unique_ptr<AtomSystem> system_;
+	/// Modulation runs here too, so LFO and noise routes animate in the preview. Audio reads as
+	/// silence: the designer does not tap the audio graph.
+	ModulationEngine modulation_;
+	EmitterConfig base_;
+	EmitterConfig modulated_;
+	float time_ = 0.0f;
 	QTimer timer_;
 	QColor background_{18, 18, 22};
 	bool playing_ = true;

@@ -22,6 +22,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace atom {
 
@@ -95,6 +96,64 @@ struct TrailHistory {
 	}
 };
 
+/// Another source in the scene, expressed in the emitter's own pixel space.
+///
+/// The host resolves these; behaviours only ever see rectangles, so collision and attraction work
+/// the same whether the rectangle came from OBS or from a test.
+struct SceneObject {
+	Vec2 center;
+	Vec2 halfSize{1.0f, 1.0f};
+	/// Rotation in degrees. Collision tests run in the object's own frame.
+	float rotation = 0.0f;
+
+	/// Point transformed into the object's unrotated frame.
+	Vec2 toLocal(const Vec2 &point) const
+	{
+		const Vec2 delta = point - center;
+		const float radians = deg2rad(-rotation);
+		const float c = std::cos(radians);
+		const float s = std::sin(radians);
+		return {delta.x * c - delta.y * s, delta.x * s + delta.y * c};
+	}
+
+	Vec2 toWorldDirection(const Vec2 &local) const
+	{
+		const float radians = deg2rad(rotation);
+		const float c = std::cos(radians);
+		const float s = std::sin(radians);
+		return {local.x * c - local.y * s, local.x * s + local.y * c};
+	}
+
+	/// Signed distance from a point to the rectangle, negative inside, plus the outward normal
+	/// to push against.
+	float distance(const Vec2 &point, Vec2 &normal) const
+	{
+		const Vec2 local = toLocal(point);
+		const Vec2 half{std::max(0.5f, halfSize.x), std::max(0.5f, halfSize.y)};
+		const Vec2 outside{std::abs(local.x) - half.x, std::abs(local.y) - half.y};
+
+		if (outside.x > 0.0f || outside.y > 0.0f) {
+			const Vec2 clamped{std::max(outside.x, 0.0f), std::max(outside.y, 0.0f)};
+			const Vec2 localNormal{clamped.x > 0.0f ? (local.x < 0.0f ? -1.0f : 1.0f) : 0.0f,
+					       clamped.y > 0.0f ? (local.y < 0.0f ? -1.0f : 1.0f) : 0.0f};
+			normal = toWorldDirection(localNormal.normalized());
+			return clamped.length();
+		}
+
+		// Inside: leave through the nearest face.
+		const Vec2 localNormal = outside.x > outside.y ? Vec2{local.x < 0.0f ? -1.0f : 1.0f, 0.0f}
+							       : Vec2{0.0f, local.y < 0.0f ? -1.0f : 1.0f};
+		normal = toWorldDirection(localNormal);
+		return std::max(outside.x, outside.y);
+	}
+
+	bool contains(const Vec2 &point) const
+	{
+		Vec2 normal;
+		return distance(point, normal) < 0.0f;
+	}
+};
+
 /// Everything the simulation needs from its host each frame.
 ///
 /// The core never talks to OBS: the host resolves things like "where is that other source right
@@ -110,6 +169,9 @@ struct SimContext {
 
 	/// Seconds since the source was created; used for time-varying fields such as turbulence.
 	float time = 0.0f;
+
+	/// Other scene sources the emitter tracks, for collision and attraction behaviours.
+	std::vector<SceneObject> objects;
 
 	Vec2 center() const { return {width * 0.5f, height * 0.5f}; }
 };

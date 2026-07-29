@@ -65,6 +65,27 @@ Items colorModeItems()
 		{"random_stop", "Atom.Design.Color.Mode.RandomStop"}};
 }
 
+Items sheetModeItems()
+{
+	return {{"over_life", "Atom.Design.Sheet.Mode.OverLife"},
+		{"loop", "Atom.Design.Sheet.Mode.Loop"},
+		{"random", "Atom.Design.Sheet.Mode.Random"}};
+}
+
+Items bloomModeItems()
+{
+	return {{"per_atom", "Atom.Render.Bloom.Mode.PerAtom"},
+		{"post", "Atom.Render.Bloom.Mode.Post"},
+		{"both", "Atom.Render.Bloom.Mode.Both"}};
+}
+
+Items routeModeItems()
+{
+	return {{"add", "Atom.Modulation.Mode.Add"},
+		{"multiply", "Atom.Modulation.Mode.Multiply"},
+		{"replace", "Atom.Modulation.Mode.Replace"}};
+}
+
 Items blendItems()
 {
 	return {{"normal", "Atom.Design.Blend.Normal"}, {"additive", "Atom.Design.Blend.Additive"}};
@@ -232,6 +253,34 @@ const FieldTable<FadeConfig> &fadeFields()
 	return fields;
 }
 
+const FieldTable<SheetConfig> &sheetFields()
+{
+	static const FieldTable<SheetConfig> fields = [] {
+		FieldTable<SheetConfig> f;
+		f.push_back(bindBool<SheetConfig>("enabled", "Atom.Design.Sheet.Enabled", &SheetConfig::enabled));
+		f.push_back(visibleWhen(bindInt<SheetConfig>("columns", "Atom.Design.Sheet.Columns",
+							     &SheetConfig::columns, 1, 64, 1),
+					"enabled=true"));
+		f.push_back(visibleWhen(bindInt<SheetConfig>("rows", "Atom.Design.Sheet.Rows", &SheetConfig::rows, 1,
+							     64, 1),
+					"enabled=true"));
+		f.push_back(visibleWhen(bindEnum<SheetConfig>("mode", "Atom.Design.Sheet.Mode", &SheetConfig::modeId,
+							      sheetModeItems()),
+					"enabled=true"));
+		f.push_back(visibleWhen(bindFloat<SheetConfig>("fps", "Atom.Design.Sheet.Fps", &SheetConfig::fps, 0.1,
+							       120.0, 0.1, {}, "fps"),
+					"mode=loop"));
+		f.push_back(visibleWhen(bindInt<SheetConfig>("first", "Atom.Design.Sheet.FirstFrame",
+							     &SheetConfig::firstFrame, 0, 4095, 1),
+					"enabled=true"));
+		f.push_back(visibleWhen(bindInt<SheetConfig>("last", "Atom.Design.Sheet.LastFrame",
+							     &SheetConfig::lastFrame, -1, 4095, 1),
+					"enabled=true"));
+		return f;
+	}();
+	return fields;
+}
+
 } // namespace
 
 const FieldTable<EmissionConfig> &emissionFields()
@@ -347,9 +396,124 @@ const FieldTable<AtomLayer> &layerFields()
 		appendNested<AtomLayer, SizeConfig>(f, sizeFields(), &AtomLayer::size, "size_", "size");
 		appendNested<AtomLayer, TrailConfig>(f, trailFields(), &AtomLayer::trail, "trail_", "trail");
 		appendNested<AtomLayer, FadeConfig>(f, fadeFields(), &AtomLayer::fade, "fade_", "fade");
+		appendNested<AtomLayer, SheetConfig>(f, sheetFields(), &AtomLayer::sheet, "sheet_", "sheet");
 		return f;
 	}();
 	return fields;
+}
+
+const FieldTable<RenderConfig> &renderFields()
+{
+	static const FieldTable<RenderConfig> fields = [] {
+		FieldTable<RenderConfig> f;
+		f.push_back(described(bindEnum<RenderConfig>("bloom_mode", "Atom.Render.Bloom.Mode",
+							     &RenderConfig::bloomModeId, bloomModeItems(), "bloom"),
+				      "Atom.Render.Bloom.Mode.Description"));
+		f.push_back(visibleWhen(bindFloat<RenderConfig>("bloom_threshold", "Atom.Render.Bloom.Threshold",
+								&RenderConfig::bloomThreshold, 0.0, 1.0, 0.01, "bloom"),
+					"bloom_mode!=per_atom"));
+		f.push_back(visibleWhen(bindFloat<RenderConfig>("bloom_intensity", "Atom.Render.Bloom.Intensity",
+								&RenderConfig::bloomIntensity, 0.0, 4.0, 0.01, "bloom"),
+					"bloom_mode!=per_atom"));
+		f.push_back(
+			visibleWhen(bindFloat<RenderConfig>("bloom_radius", "Atom.Render.Bloom.Radius",
+							    &RenderConfig::bloomRadius, 0.5, 64.0, 0.5, "bloom", "px"),
+				    "bloom_mode!=per_atom"));
+		f.push_back(visibleWhen(bindInt<RenderConfig>("bloom_iterations", "Atom.Render.Bloom.Iterations",
+							      &RenderConfig::bloomIterations, 1, 6, 1, "bloom"),
+					"bloom_mode!=per_atom"));
+		f.push_back(visibleWhen(bindInt<RenderConfig>("bloom_downscale", "Atom.Render.Bloom.Downscale",
+							      &RenderConfig::bloomDownscale, 1, 8, 1, "bloom"),
+					"bloom_mode!=per_atom"));
+		f.push_back(bindFloat<RenderConfig>("size_scale", "Atom.Render.SizeScale", &RenderConfig::sizeScale,
+						    0.0, 8.0, 0.01, "global"));
+		f.push_back(bindFloat<RenderConfig>("bloom_scale", "Atom.Render.BloomScale", &RenderConfig::bloomScale,
+						    0.0, 8.0, 0.01, "global"));
+		f.push_back(bindFloat<RenderConfig>("opacity", "Atom.Render.Opacity", &RenderConfig::opacity, 0.0, 1.0,
+						    0.01, "global"));
+		f.push_back(described(bindFloat<RenderConfig>("time_scale", "Atom.Render.TimeScale",
+							      &RenderConfig::timeScale, 0.0, 4.0, 0.01, "global"),
+				      "Atom.Render.TimeScale.Description"));
+		return f;
+	}();
+	return fields;
+}
+
+const FieldTable<SceneConfig> &sceneFields()
+{
+	static const FieldTable<SceneConfig> fields = [] {
+		FieldTable<SceneConfig> f;
+		f.push_back(bindBool<SceneConfig>("track_all", "Atom.Scene.TrackAll", &SceneConfig::trackAll, "scene"));
+		f.push_back(
+			visibleWhen(described(bindText<SceneConfig>("sources", "Atom.Scene.Sources",
+								    &SceneConfig::sources, ParamType::Text, "scene"),
+					      "Atom.Scene.Sources.Description"),
+				    "track_all=false"));
+		f.push_back(bindFloat<SceneConfig>("padding", "Atom.Scene.Padding", &SceneConfig::padding, -200.0,
+						   200.0, 1.0, "scene", "px"));
+		return f;
+	}();
+	return fields;
+}
+
+const FieldTable<AudioConfig> &audioFields()
+{
+	static const FieldTable<AudioConfig> fields = [] {
+		FieldTable<AudioConfig> f;
+		f.push_back(described(bindText<AudioConfig>("audio_source", "Atom.Audio.Source",
+							    &AudioConfig::sourceName, ParamType::SourceRef, "audio"),
+				      "Atom.Audio.Source.Description"));
+		f.push_back(bindFloat<AudioConfig>("audio_gain", "Atom.Audio.Gain", &AudioConfig::gain, 0.0, 16.0, 0.05,
+						   "audio"));
+		f.push_back(bindFloat<AudioConfig>("audio_attack", "Atom.Audio.Attack", &AudioConfig::attack, 0.0, 1.0,
+						   0.005, "audio", "s"));
+		f.push_back(bindFloat<AudioConfig>("audio_release", "Atom.Audio.Release", &AudioConfig::release, 0.0,
+						   3.0, 0.005, "audio", "s"));
+		return f;
+	}();
+	return fields;
+}
+
+const FieldTable<ModulationRoute> &routeFields()
+{
+	static const FieldTable<ModulationRoute> fields = [] {
+		FieldTable<ModulationRoute> f;
+		f.push_back(bindBool<ModulationRoute>("enabled", "Atom.Modulation.Enabled", &ModulationRoute::enabled));
+		f.push_back(bindRegistryEnum<ModulationRoute>("modulator", "Atom.Modulation.Modulator",
+							      &ModulationRoute::modulatorId, registries::kModulator));
+		f.push_back(bindEnum<ModulationRoute>("target", "Atom.Modulation.Target", &ModulationRoute::target,
+						      modulationTargets()));
+		f.push_back(bindEnum<ModulationRoute>("mode", "Atom.Modulation.Mode", &ModulationRoute::modeId,
+						      routeModeItems()));
+		f.push_back(described(bindFloat<ModulationRoute>("amount", "Atom.Modulation.Amount",
+								 &ModulationRoute::amount, -10000.0, 10000.0, 0.01),
+				      "Atom.Modulation.Amount.Description"));
+		f.push_back(bindFloat<ModulationRoute>("smoothing", "Atom.Modulation.Smoothing",
+						       &ModulationRoute::smoothing, 0.0, 2.0, 0.01, {}, "s"));
+		return f;
+	}();
+	return fields;
+}
+
+const std::vector<std::pair<std::string, std::string>> &modulationTargets()
+{
+	// Anything numeric in these tables can be driven, so binding a new option makes it
+	// modulatable with no extra work.
+	static const std::vector<std::pair<std::string, std::string>> targets = [] {
+		std::vector<std::pair<std::string, std::string>> list;
+		const auto append = [&list](const ParamSchema &schema, const std::string &prefix) {
+			for (const ParamSpec &spec : schema) {
+				if (spec.type != ParamType::Float && spec.type != ParamType::Int)
+					continue;
+				list.emplace_back(prefix + spec.id, spec.label);
+			}
+		};
+		append(schemaOf(emissionFields()), "emission.");
+		append(schemaOf(physicsFields()), "physics.");
+		append(schemaOf(renderFields()), "render.");
+		return list;
+	}();
+	return targets;
 }
 
 std::string makeLayerId()

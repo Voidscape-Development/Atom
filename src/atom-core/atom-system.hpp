@@ -42,6 +42,11 @@ public:
 	/// Applies a new configuration, rebuilding modules. Live atoms are kept unless the emitter
 	/// shape or the design's layer count changed in a way that invalidates them.
 	void configure(const EmitterConfig &config);
+
+	/// Applies a per-frame modulated configuration. Identical to configure() except that it
+	/// never prewarms, so a modulated emitter does not restart itself sixty times a second.
+	void setModulatedConfig(const EmitterConfig &config) { applyConfig(config, false); }
+
 	const EmitterConfig &config() const { return config_; }
 
 	/// Advances the simulation. `context` only needs the host-resolved fields filled in
@@ -106,6 +111,7 @@ private:
 	float spawnAccumulator_ = 0.0f;
 	float burstTimer_ = 0.0f;
 	bool emitting_ = true;
+	bool configured_ = false;
 	bool hasEndpointTarget_ = false;
 	Vec2 endpointTarget_;
 };

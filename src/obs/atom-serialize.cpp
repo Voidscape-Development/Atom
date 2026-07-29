@@ -375,6 +375,20 @@ void configToData(obs_data_t *data, const EmitterConfig &config)
 {
 	writeBag(data, schemaOf(emissionFields()), toBag(config.emission, emissionFields()));
 	writeBag(data, schemaOf(physicsFields()), toBag(config.physics, physicsFields()));
+	writeBag(data, schemaOf(renderFields()), toBag(config.render, renderFields()));
+	writeBag(data, schemaOf(sceneFields()), toBag(config.scene, sceneFields()));
+	writeBag(data, schemaOf(audioFields()), toBag(config.audio, audioFields()));
+
+	obs_data_array_t *routes = obs_data_array_create();
+	for (const ModulationRoute &route : config.modulation) {
+		obs_data_t *item = obs_data_create();
+		writeBag(item, schemaOf(routeFields()), toBag(route, routeFields()));
+		writeModuleParams(item, "mod", registries::kModulator, route.modulatorId, route.modulatorParams);
+		obs_data_array_push_back(routes, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(data, "modulation", routes);
+	obs_data_array_release(routes);
 
 	writeModuleParams(data, "shape", registries::kEmitterShape, config.emission.shapeId,
 			  config.emission.shapeParams);
@@ -409,6 +423,24 @@ EmitterConfig configFromData(obs_data_t *data)
 
 	fromBag(config.emission, readBag(data, schemaOf(emissionFields())), emissionFields());
 	fromBag(config.physics, readBag(data, schemaOf(physicsFields())), physicsFields());
+	fromBag(config.render, readBag(data, schemaOf(renderFields())), renderFields());
+	fromBag(config.scene, readBag(data, schemaOf(sceneFields())), sceneFields());
+	fromBag(config.audio, readBag(data, schemaOf(audioFields())), audioFields());
+
+	obs_data_array_t *routes = obs_data_get_array(data, "modulation");
+	if (routes) {
+		const size_t count = obs_data_array_count(routes);
+		for (size_t i = 0; i < count; ++i) {
+			obs_data_t *item = obs_data_array_item(routes, i);
+			ModulationRoute route;
+			fromBag(route, readBag(item, schemaOf(routeFields())), routeFields());
+			route.modulatorParams =
+				readModuleParams(item, "mod", registries::kModulator, route.modulatorId);
+			config.modulation.push_back(std::move(route));
+			obs_data_release(item);
+		}
+		obs_data_array_release(routes);
+	}
 
 	config.emission.shapeParams =
 		readModuleParams(data, "shape", registries::kEmitterShape, config.emission.shapeId);
@@ -449,6 +481,9 @@ void configDefaults(obs_data_t *data)
 {
 	setDefaults(data, schemaOf(emissionFields()));
 	setDefaults(data, schemaOf(physicsFields()));
+	setDefaults(data, schemaOf(renderFields()));
+	setDefaults(data, schemaOf(sceneFields()));
+	setDefaults(data, schemaOf(audioFields()));
 
 	// Every module's parameters get their defaults too, so switching modules in the UI starts
 	// from sensible values rather than zeroes.

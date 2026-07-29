@@ -20,6 +20,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "atom-sprite-cache.hpp"
 #include "plugin-support.h"
 
+#include <graphics/vec2.h>
+#include <graphics/vec4.h>
+
 #include <obs-module.h>
 
 namespace atom {
@@ -53,8 +56,10 @@ gs_effect_t *atomEffect()
 	return g_effect;
 }
 
-/// Emits one rotated, colour-modulated quad as two triangles.
-void emitQuad(const Vec2 &center, float size, float rotationDegrees, uint32_t color)
+/// Emits one rotated, colour-modulated quad as two triangles, over a sub-rectangle of the
+/// sprite texture (the whole texture unless a sprite sheet is in play).
+void emitQuad(const Vec2 &center, float size, float rotationDegrees, uint32_t color, float u0 = 0.0f, float v0 = 0.0f,
+	      float u1 = 1.0f, float v1 = 1.0f)
 {
 	const float half = size * 0.5f;
 	const float radians = deg2rad(rotationDegrees);
@@ -70,7 +75,7 @@ void emitQuad(const Vec2 &center, float size, float rotationDegrees, uint32_t co
 		center + right + down,
 		center - right + down,
 	};
-	const float uvs[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+	const float uvs[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
 	const int order[6] = {0, 1, 2, 0, 2, 3};
 
 	for (int i = 0; i < 6; ++i) {
@@ -108,7 +113,10 @@ void emitSegment(const Vec2 &from, const Vec2 &to, float width, uint32_t colorFr
 
 void setBlend(bool additive)
 {
-	gs_blend_function(GS_BLEND_SRCALPHA, additive ? GS_BLEND_ONE : GS_BLEND_INVSRCALPHA);
+	// Alpha is accumulated separately so the offscreen bloom buffer ends up premultiplied and
+	// composites correctly; drawing straight to the target behaves the same as before.
+	gs_blend_function_separate(GS_BLEND_SRCALPHA, additive ? GS_BLEND_ONE : GS_BLEND_INVSRCALPHA, GS_BLEND_ONE,
+				   GS_BLEND_INVSRCALPHA);
 }
 
 void drawWithTexture(gs_effect_t *effect, gs_texture_t *texture, const std::function<void()> &emit)
@@ -138,6 +146,7 @@ ParamBag bloomSpriteParams(const BloomConfig &bloom)
 
 void AtomRenderer::releaseGraphics()
 {
+	// Per-source buffers are released by their own sources; this only owns the shared pieces.
 	if (g_effect) {
 		gs_effect_destroy(g_effect);
 		g_effect = nullptr;
@@ -251,9 +260,198 @@ void AtomRenderer::renderLayer(const AtomSystem &system, size_t layerIndex, cons
 			const AtomVisual visual = evaluator.evaluate(atoms[index]);
 			if (visual.color.a <= 0.002f || visual.size <= 0.0f)
 				continue;
-			emitQuad(visual.position, visual.size, visual.rotation, visual.color.toRGBA());
+			emitQuad(visual.position, visual.size, visual.rotation, visual.color.toRGBA(), visual.u0,
+				 visual.v0, visual.u1, visual.v1);
 		}
 	});
+}
+
+void AtomRenderer::drawAtoms(const AtomSystem &system)
+{
+	const AtomDesign &design = system.config().design;
+	const std::vector<Atom> &atoms = system.atoms();
+
+	buckets_.resize(design.layers.size());
+	for (std::vector<size_t> &bucket : buckets_)
+		bucket.clear();
+
+	for (size_t i = 0; i < atoms.size(); ++i) {
+		const size_t layer = atoms[i].layer;
+		if (layer < buckets_.size())
+			buckets_[layer].push_back(i);
+	}
+
+	for (size_t i = 0; i < buckets_.size(); ++i)
+		renderLayer(system, i, buckets_[i]);
+}
+
+AtomRenderer::~AtomRenderer()
+{
+	// Buffers belong to the graphics subsystem; the source releases them from a graphics
+	// context before destroying the renderer.
+}
+
+void AtomRenderer::releaseBuffers()
+{
+	if (scene_) {
+		gs_texrender_destroy(scene_);
+		scene_ = nullptr;
+	}
+	if (bloomA_) {
+		gs_texrender_destroy(bloomA_);
+		bloomA_ = nullptr;
+	}
+	if (bloomB_) {
+		gs_texrender_destroy(bloomB_);
+		bloomB_ = nullptr;
+	}
+	sceneWidth_ = sceneHeight_ = bloomWidth_ = bloomHeight_ = 0;
+}
+
+bool AtomRenderer::ensureBuffers(uint32_t width, uint32_t height, uint32_t bloomWidth, uint32_t bloomHeight)
+{
+	if (width == 0 || height == 0 || bloomWidth == 0 || bloomHeight == 0)
+		return false;
+
+	// gs_texrender objects keep their own size, so they only need recreating when it changes.
+	if (!scene_)
+		scene_ = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	if (!bloomA_ || bloomWidth != bloomWidth_ || bloomHeight != bloomHeight_) {
+		if (bloomA_)
+			gs_texrender_destroy(bloomA_);
+		if (bloomB_)
+			gs_texrender_destroy(bloomB_);
+		bloomA_ = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+		bloomB_ = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	}
+
+	sceneWidth_ = width;
+	sceneHeight_ = height;
+	bloomWidth_ = bloomWidth;
+	bloomHeight_ = bloomHeight;
+	return scene_ && bloomA_ && bloomB_;
+}
+
+bool AtomRenderer::renderWithBloom(const AtomSystem &system, uint32_t width, uint32_t height)
+{
+	gs_effect_t *effect = atomEffect();
+	if (!effect)
+		return false;
+
+	const RenderConfig &render = system.config().render;
+	const uint32_t downscale = static_cast<uint32_t>(std::max(1, render.bloomDownscale));
+	const uint32_t bloomWidth = std::max(1u, width / downscale);
+	const uint32_t bloomHeight = std::max(1u, height / downscale);
+
+	if (!ensureBuffers(width, height, bloomWidth, bloomHeight))
+		return false;
+
+	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+	gs_eparam_t *thresholdParam = gs_effect_get_param_by_name(effect, "threshold");
+	gs_eparam_t *intensityParam = gs_effect_get_param_by_name(effect, "intensity");
+	gs_eparam_t *texelParam = gs_effect_get_param_by_name(effect, "texel");
+
+	// 1. Atoms into their own buffer. Separate blending for colour and alpha keeps the result
+	//    premultiplied, which is what makes the composite below correct over any background.
+	gs_texrender_reset(scene_);
+	if (gs_texrender_begin(scene_, width, height)) {
+		struct vec4 clear;
+		vec4_zero(&clear);
+		gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+		gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+
+		gs_blend_state_push();
+		gs_enable_blending(true);
+		drawAtoms(system);
+		gs_blend_state_pop();
+
+		gs_texrender_end(scene_);
+	} else {
+		return false;
+	}
+
+	gs_texture_t *sceneTexture = gs_texrender_get_texture(scene_);
+	if (!sceneTexture)
+		return false;
+
+	// 2. Bright pass into the half-size buffer.
+	gs_texrender_reset(bloomA_);
+	if (gs_texrender_begin(bloomA_, bloomWidth, bloomHeight)) {
+		struct vec4 clear;
+		vec4_zero(&clear);
+		gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+		gs_ortho(0.0f, static_cast<float>(bloomWidth), 0.0f, static_cast<float>(bloomHeight), -100.0f, 100.0f);
+
+		gs_blend_state_push();
+		gs_enable_blending(false);
+		gs_effect_set_texture(image, sceneTexture);
+		gs_effect_set_float(thresholdParam, saturate(render.bloomThreshold));
+		while (gs_effect_loop(effect, "BrightPass"))
+			gs_draw_sprite(sceneTexture, 0, bloomWidth, bloomHeight);
+		gs_blend_state_pop();
+
+		gs_texrender_end(bloomA_);
+	}
+
+	// 3. Separable blur, ping-ponging between the two small buffers.
+	const int iterations = std::max(1, std::min(6, render.bloomIterations));
+	const float radius = std::max(0.5f, render.bloomRadius) / static_cast<float>(downscale);
+
+	gs_texrender_t *source = bloomA_;
+	gs_texrender_t *destination = bloomB_;
+	for (int i = 0; i < iterations * 2; ++i) {
+		gs_texture_t *input = gs_texrender_get_texture(source);
+		if (!input)
+			break;
+
+		// Alternate horizontal and vertical, widening the reach on later iterations.
+		const float spread = radius * static_cast<float>(1 + i / 2);
+		struct vec2 texel;
+		if (i % 2 == 0)
+			vec2_set(&texel, spread / static_cast<float>(bloomWidth), 0.0f);
+		else
+			vec2_set(&texel, 0.0f, spread / static_cast<float>(bloomHeight));
+
+		gs_texrender_reset(destination);
+		if (gs_texrender_begin(destination, bloomWidth, bloomHeight)) {
+			struct vec4 clear;
+			vec4_zero(&clear);
+			gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+			gs_ortho(0.0f, static_cast<float>(bloomWidth), 0.0f, static_cast<float>(bloomHeight), -100.0f,
+				 100.0f);
+
+			gs_blend_state_push();
+			gs_enable_blending(false);
+			gs_effect_set_texture(image, input);
+			gs_effect_set_vec2(texelParam, &texel);
+			while (gs_effect_loop(effect, "Blur"))
+				gs_draw_sprite(input, 0, bloomWidth, bloomHeight);
+			gs_blend_state_pop();
+
+			gs_texrender_end(destination);
+		}
+
+		std::swap(source, destination);
+	}
+
+	// 4. Composite: the atoms as they were, then the blurred highlights added on top.
+	gs_blend_state_push();
+	gs_enable_blending(true);
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+	gs_effect_set_texture(image, sceneTexture);
+	while (gs_effect_loop(effect, "Copy"))
+		gs_draw_sprite(sceneTexture, 0, width, height);
+
+	if (gs_texture_t *bloom = gs_texrender_get_texture(source)) {
+		gs_blend_function(GS_BLEND_ONE, GS_BLEND_ONE);
+		gs_effect_set_texture(image, bloom);
+		gs_effect_set_float(intensityParam, std::max(0.0f, render.bloomIntensity));
+		while (gs_effect_loop(effect, "Composite"))
+			gs_draw_sprite(bloom, 0, width, height);
+	}
+	gs_blend_state_pop();
+
+	return true;
 }
 
 void AtomRenderer::render(const AtomSystem &system)
@@ -266,22 +464,20 @@ void AtomRenderer::render(const AtomSystem &system)
 	if (design.layers.empty() || atoms.empty())
 		return;
 
-	buckets_.resize(design.layers.size());
-	for (std::vector<size_t> &bucket : buckets_)
-		bucket.clear();
-
-	for (size_t i = 0; i < atoms.size(); ++i) {
-		const size_t layer = atoms[i].layer;
-		if (layer < buckets_.size())
-			buckets_[layer].push_back(i);
+	const RenderConfig &render = system.config().render;
+	if (render.usesPostBloom()) {
+		const uint32_t width = system.config().emission.width;
+		const uint32_t height = system.config().emission.height;
+		if (renderWithBloom(system, width, height))
+			return;
+		// Buffers unavailable: fall through and draw straight to the target.
+	} else if (scene_) {
+		releaseBuffers();
 	}
 
 	gs_blend_state_push();
 	gs_enable_blending(true);
-
-	for (size_t i = 0; i < buckets_.size(); ++i)
-		renderLayer(system, i, buckets_[i]);
-
+	drawAtoms(system);
 	gs_blend_state_pop();
 }
 

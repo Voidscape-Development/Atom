@@ -48,12 +48,53 @@ void AtomSystem::configure(const EmitterConfig &config)
 	applyConfig(config, true);
 }
 
+namespace {
+
+/// True when two configurations select exactly the same modules, so only values changed.
+///
+/// Modulation rewrites the config every frame; without this the module objects would be destroyed
+/// and rebuilt sixty times a second for nothing.
+bool sameModules(const EmitterConfig &a, const EmitterConfig &b)
+{
+	if (a.emission.shapeId != b.emission.shapeId || a.physics.falloffId != b.physics.falloffId ||
+	    a.physics.endpoint.modeId != b.physics.endpoint.modeId ||
+	    a.emission.shapeParams.values() != b.emission.shapeParams.values() ||
+	    a.physics.falloffParams.values() != b.physics.falloffParams.values())
+		return false;
+
+	if (a.physics.extras.size() != b.physics.extras.size())
+		return false;
+	for (size_t i = 0; i < a.physics.extras.size(); ++i) {
+		if (a.physics.extras[i].id != b.physics.extras[i].id ||
+		    a.physics.extras[i].enabled != b.physics.extras[i].enabled ||
+		    a.physics.extras[i].params.values() != b.physics.extras[i].params.values())
+			return false;
+	}
+
+	if (a.design.layers.size() != b.design.layers.size())
+		return false;
+	for (size_t i = 0; i < a.design.layers.size(); ++i) {
+		const AtomLayer &x = a.design.layers[i];
+		const AtomLayer &y = b.design.layers[i];
+		if (x.fade.pathId != y.fade.pathId || x.trail.styleId != y.trail.styleId ||
+		    x.trail.enabled != y.trail.enabled || x.fade.pathParams.values() != y.fade.pathParams.values() ||
+		    x.trail.styleParams.values() != y.trail.styleParams.values())
+			return false;
+	}
+
+	return true;
+}
+
+} // namespace
+
 void AtomSystem::applyConfig(const EmitterConfig &config, bool allowPrewarm)
 {
 	const bool shapeChanged = config.emission.shapeId != config_.emission.shapeId;
 	const bool layerCountChanged = config.design.layers.size() != config_.design.layers.size();
+	const bool modulesUnchanged = configured_ && sameModules(config, config_);
 
 	config_ = config;
+	configured_ = true;
 
 	if (config_.design.layers.empty())
 		config_.design = AtomDesign::defaultDesign();
@@ -61,7 +102,10 @@ void AtomSystem::applyConfig(const EmitterConfig &config, bool allowPrewarm)
 	if (!config_.emission.randomSeed)
 		random_.setSeed(static_cast<uint32_t>(config_.emission.seed) * 2654435761u + 1u);
 
-	rebuildModules();
+	if (modulesUnchanged)
+		evaluator_.refreshValues(config_.design, config_.physics, config_.render);
+	else
+		rebuildModules();
 
 	context_.width = width();
 	context_.height = height();
@@ -118,7 +162,7 @@ void AtomSystem::rebuildModules()
 		behaviors_.push_back(std::move(behavior));
 	}
 
-	evaluator_.rebuild(config_.design, config_.physics);
+	evaluator_.rebuild(config_.design, config_.physics, config_.render);
 }
 
 bool AtomSystem::needsHostTarget() const
@@ -338,7 +382,11 @@ void AtomSystem::update(float dt, SimContext context)
 	if (dt <= 0.0f)
 		return;
 
-	dt = std::min(dt, kMaxTimeStep);
+	// Time scale is a render-level trim, but it is the simulation that has to honour it.
+	dt = std::min(dt, kMaxTimeStep) * std::max(0.0f, config_.render.timeScale);
+	if (dt <= 0.0f)
+		return;
+
 	time_ += dt;
 
 	context.width = width();

@@ -20,6 +20,15 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 namespace atom {
 
+namespace {
+
+int clampInt(int value, int low, int high)
+{
+	return value < low ? low : (value > high ? high : value);
+}
+
+} // namespace
+
 Color rotateHue(const Color &color, float turns)
 {
 	if (std::abs(turns) < 1e-4f)
@@ -44,10 +53,18 @@ Color rotateHue(const Color &color, float turns)
 DesignEvaluator::DesignEvaluator() = default;
 DesignEvaluator::~DesignEvaluator() = default;
 
-void DesignEvaluator::rebuild(const AtomDesign &design, const PhysicsConfig &physics)
+void DesignEvaluator::refreshValues(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render)
 {
 	design_ = design;
 	physics_ = physics;
+	render_ = render;
+}
+
+void DesignEvaluator::rebuild(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render)
+{
+	design_ = design;
+	physics_ = physics;
+	render_ = render;
 
 	falloff_ = FalloffRegistry::instance().create(physics.falloffId);
 	if (!falloff_)
@@ -123,9 +140,37 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 	visual.shapedAge = t;
 	visual.additive = layer->blendId == "additive";
 
-	// Size over life.
+	// Size over life, then the emitter's global trim.
 	const float sizeScale = layer->size.overLife.points.empty() ? 1.0f : layer->size.overLife.sample(t);
-	visual.size = std::max(layer->size.minimum, atom.size * sizeScale);
+	visual.size = std::max(layer->size.minimum, atom.size * sizeScale) * std::max(0.0f, render_.sizeScale);
+
+	// Sprite-sheet frame.
+	if (layer->sheet.enabled) {
+		const int columns = std::max(1, layer->sheet.columns);
+		const int rows = std::max(1, layer->sheet.rows);
+		const int total = columns * rows;
+		const int first = clampInt(layer->sheet.firstFrame, 0, total - 1);
+		const int last = layer->sheet.lastFrame < 0 ? total - 1
+							    : clampInt(layer->sheet.lastFrame, first, total - 1);
+		const int span = last - first + 1;
+
+		int frame = first;
+		if (layer->sheet.modeId == "random") {
+			frame = first + static_cast<int>(atom.randomC * static_cast<float>(span));
+		} else if (layer->sheet.modeId == "loop") {
+			frame = first + static_cast<int>(atom.age * std::max(0.01f, layer->sheet.fps)) % span;
+		} else {
+			frame = first + static_cast<int>(t * static_cast<float>(span));
+		}
+		frame = clampInt(frame, first, last);
+
+		const int column = frame % columns;
+		const int row = frame / columns;
+		visual.u0 = static_cast<float>(column) / static_cast<float>(columns);
+		visual.v0 = static_cast<float>(row) / static_cast<float>(rows);
+		visual.u1 = visual.u0 + 1.0f / static_cast<float>(columns);
+		visual.v1 = visual.v0 + 1.0f / static_cast<float>(rows);
+	}
 
 	// Colour over life.
 	Color color = evaluateColor(*layer, atom, t);
@@ -148,14 +193,15 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 		alpha *= lerp(1.0f, wave, saturate(layer->fade.flicker));
 	}
 
-	color.a = saturate(alpha) * color.a * atom.tint.a;
+	color.a = saturate(alpha) * color.a * atom.tint.a * saturate(render_.opacity);
 	visual.color = color;
 
 	// Bloom is drawn as a larger, dimmer quad behind the atom: cheap, and it reads as either a
 	// light source or a puff of smoke depending on softness.
-	if (layer->bloom.amount > 1e-3f) {
+	const float bloomAmount = layer->bloom.amount * std::max(0.0f, render_.bloomScale);
+	if (render_.usesPerAtomBloom() && bloomAmount > 1e-3f) {
 		visual.bloomSize = visual.size * std::max(1.0f, layer->bloom.radius);
-		visual.bloomAlpha = saturate(color.a * layer->bloom.amount * lerp(1.0f, 0.55f, layer->bloom.softness));
+		visual.bloomAlpha = saturate(color.a * bloomAmount * lerp(1.0f, 0.55f, layer->bloom.softness));
 		visual.bloomColor = layer->bloom.inheritColor ? color : layer->bloom.tint;
 		visual.bloomColor.a = visual.bloomAlpha;
 	}

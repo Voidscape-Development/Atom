@@ -22,6 +22,8 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <obs-module.h>
 
+#include <string>
+
 namespace atom {
 
 /// Source id of the Atom Emitter.
@@ -37,5 +39,15 @@ EmitterConfig configOfSource(obs_source_t *source);
 
 /// Writes a whole configuration back to a live source, which reconfigures it immediately.
 void applyConfigToSource(obs_source_t *source, const EmitterConfig &config);
+
+/// Trigger commands, addressed by source name.
+///
+/// Hotkeys, the source's own proc handler and the obs-websocket vendor all funnel through these,
+/// so every entry point behaves identically. `count` of 0 means "the configured burst size".
+/// Each returns false when no emitter by that name exists.
+bool sourceBurst(const std::string &sourceName, int count);
+bool sourceReset(const std::string &sourceName);
+bool sourceSetEmitting(const std::string &sourceName, bool emitting);
+bool sourceStatus(const std::string &sourceName, int &atoms, bool &emitting);
 
 } // namespace atom

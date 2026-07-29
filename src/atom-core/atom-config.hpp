@@ -35,6 +35,7 @@ constexpr const char *kTrail = "trail";
 constexpr const char *kFadePath = "fade_path";
 constexpr const char *kFalloff = "falloff";
 constexpr const char *kEndpoint = "endpoint";
+constexpr const char *kModulator = "modulator";
 } // namespace registries
 
 /// A configured instance of a registered behaviour. The extras list on PhysicsConfig holds these,
@@ -199,6 +200,20 @@ struct FadeConfig {
 	float flickerSpeed = 9.0f;
 };
 
+/// Sprite-sheet animation for an image-based atom.
+struct SheetConfig {
+	bool enabled = false;
+	int columns = 1;
+	int rows = 1;
+	/// "loop" plays at `fps`, "over_life" spreads the sheet across the atom's lifetime, and
+	/// "random" picks one frame per atom.
+	std::string modeId = "over_life";
+	float fps = 12.0f;
+	/// First and last frame to use; -1 means "to the end of the sheet".
+	int firstFrame = 0;
+	int lastFrame = -1;
+};
+
 /// One kind of atom in a design. A design can hold several, each with its own spawn weight, which
 /// is how a single emitter produces e.g. sparks plus smoke.
 struct AtomLayer {
@@ -219,6 +234,7 @@ struct AtomLayer {
 	SizeConfig size;
 	TrailConfig trail;
 	FadeConfig fade;
+	SheetConfig sheet;
 };
 
 /// The look of an emitter: everything edited in the Atom Designer window.
@@ -237,11 +253,78 @@ struct AtomDesign {
 	bool anyTrails() const;
 };
 
+/// Emitter-wide rendering options, including the optional high-quality bloom pass.
+struct RenderConfig {
+	/// "per_atom" draws a glow quad behind each atom, "post" runs a threshold + blur pass over
+	/// the whole emitter, and "both" does each.
+	std::string bloomModeId = "per_atom";
+	float bloomThreshold = 0.65f;
+	float bloomIntensity = 0.9f;
+	/// Blur reach in pixels at the emitter's own resolution.
+	float bloomRadius = 6.0f;
+	int bloomIterations = 2;
+	/// Downscale factor for the blur buffers. Higher is softer and cheaper.
+	int bloomDownscale = 2;
+
+	/// Global multipliers, handy both as quick trims and as modulation targets.
+	float sizeScale = 1.0f;
+	float bloomScale = 1.0f;
+	float opacity = 1.0f;
+	/// Simulation speed. 0 freezes the emitter without clearing it.
+	float timeScale = 1.0f;
+
+	bool usesPostBloom() const { return bloomModeId == "post" || bloomModeId == "both"; }
+	bool usesPerAtomBloom() const { return bloomModeId == "per_atom" || bloomModeId == "both"; }
+};
+
+/// Which other sources in the scene the emitter knows about.
+///
+/// The host resolves these into SimContext::objects each frame; collision and attraction
+/// behaviours then work off plain rectangles.
+struct SceneConfig {
+	/// Comma-separated source names.
+	std::string sources;
+	/// Track every other source in the scene instead of a named list.
+	bool trackAll = false;
+	/// Grow or shrink each tracked rectangle, in pixels.
+	float padding = 0.0f;
+};
+
+/// Which audio the emitter listens to. The host does the metering; modulators just read the result.
+struct AudioConfig {
+	/// Name of an OBS source with audio. Empty means no metering at all.
+	std::string sourceName;
+	float gain = 1.0f;
+	/// Envelope follower times, in seconds.
+	float attack = 0.02f;
+	float release = 0.18f;
+};
+
+/// One modulation route: a modulator driving one parameter.
+struct ModulationRoute {
+	bool enabled = true;
+	/// Registered modulator ("audio", "lfo", "noise", "constant").
+	std::string modulatorId = "audio";
+	ParamBag modulatorParams;
+	/// Parameter this route drives, by id, from modulationTargets().
+	std::string target;
+	/// "add" offsets the value, "multiply" scales toward `amount`, "replace" blends to `amount`.
+	std::string modeId = "add";
+	/// Meaning depends on the mode; always expressed in the target parameter's own units.
+	float amount = 1.0f;
+	/// Seconds to approach a new value. 0 is instant.
+	float smoothing = 0.05f;
+};
+
 /// Full configuration of one Atom Emitter source.
 struct EmitterConfig {
 	EmissionConfig emission;
 	PhysicsConfig physics;
 	AtomDesign design;
+	RenderConfig render;
+	SceneConfig scene;
+	AudioConfig audio;
+	std::vector<ModulationRoute> modulation;
 };
 
 /// Field tables. These describe the config structs to the rest of the plugin; nothing else should
@@ -249,6 +332,16 @@ struct EmitterConfig {
 const FieldTable<EmissionConfig> &emissionFields();
 const FieldTable<PhysicsConfig> &physicsFields();
 const FieldTable<AtomLayer> &layerFields();
+const FieldTable<RenderConfig> &renderFields();
+const FieldTable<SceneConfig> &sceneFields();
+const FieldTable<AudioConfig> &audioFields();
+const FieldTable<ModulationRoute> &routeFields();
+
+/// Every parameter a modulation route can drive, as {id, locale key}.
+///
+/// Built from the emission, physics and render field tables, so a new numeric option becomes
+/// modulatable the moment it is bound.
+const std::vector<std::pair<std::string, std::string>> &modulationTargets();
 
 /// Generates a reasonably unique layer id.
 std::string makeLayerId();

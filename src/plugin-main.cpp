@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "obs/atom-renderer.hpp"
 #include "obs/atom-source.hpp"
+#include "obs/atom-triggers.hpp"
 #include "ui/atom-ui.hpp"
 #include "atom-core/atom-registry.hpp"
 #include "plugin-support.h"
@@ -41,6 +42,7 @@ bool obs_module_load(void)
 {
 	atom::registerBuiltinModules();
 	atom::registerEmitterSource();
+	atom::registerTriggerApi();
 
 	obs_log(LOG_INFO, "Atom %s loaded", PLUGIN_VERSION);
 	return true;

@@ -549,6 +549,67 @@ AtomPreset rain()
 	return preset;
 }
 
+AtomPreset beatSparks()
+{
+	AtomPreset preset;
+	preset.id = "beat_sparks";
+	preset.name = "Beat Sparks";
+	preset.category = "audio";
+	preset.description = "Atom.Preset.BeatSparks.Description";
+
+	EmitterConfig &config = preset.config;
+	config.emission.shapeId = "line";
+	config.emission.shapeParams.set("from", Vec2{0.1f, 0.85f});
+	config.emission.shapeParams.set("to", Vec2{0.9f, 0.85f});
+	config.emission.rate = 10.0f;
+
+	config.physics.gravity = 420.0f;
+	config.physics.initialSpeed = 120.0f;
+	config.physics.emitAngle = -90.0f;
+	config.physics.emitSpread = 45.0f;
+	config.physics.drag = 1.0f;
+	config.physics.lifetime = 1.4f;
+	config.physics.alignToVelocity = true;
+	config.physics.offset.speed = 0.5f;
+
+	AtomLayer spark = makeLayer(
+		"Spark", "soft_circle",
+		Gradient{{{0.0f, rgba(255, 255, 240)}, {0.4f, rgba(120, 220, 255)}, {1.0f, rgba(40, 90, 255, 0)}}},
+		5.0f);
+	spark.bloom.amount = 0.9f;
+	spark.bloom.radius = 3.0f;
+	spark.trail.enabled = true;
+	spark.trail.styleId = "streak";
+	spark.trail.length = 0.12f;
+	config.design.layers.push_back(spark);
+
+	// Pick an audio source in the designer and these come alive: bass drives how many atoms are
+	// launched, overall level drives how big they are.
+	ModulationRoute rate;
+	rate.modulatorId = "audio";
+	rate.modulatorParams.set("band", std::string("low"));
+	rate.modulatorParams.set("gain", 3.0);
+	rate.target = "emission.rate";
+	rate.modeId = "add";
+	rate.amount = 420.0f;
+	rate.smoothing = 0.04f;
+	config.modulation.push_back(rate);
+
+	ModulationRoute size;
+	size.modulatorId = "audio";
+	size.modulatorParams.set("band", std::string("level"));
+	size.modulatorParams.set("gain", 2.5);
+	size.target = "render.size_scale";
+	size.modeId = "add";
+	size.amount = 1.2f;
+	size.smoothing = 0.08f;
+	config.modulation.push_back(size);
+
+	config.render.bloomModeId = "both";
+	config.design.name = preset.name;
+	return preset;
+}
+
 } // namespace
 
 const std::vector<std::pair<std::string, std::string>> &presetCategories()
@@ -560,6 +621,7 @@ const std::vector<std::pair<std::string, std::string>> &presetCategories()
 		{"magic", "Atom.Category.Magic"},
 		{"celebration", "Atom.Category.Celebration"},
 		{"weather", "Atom.Category.Weather"},
+		{"audio", "Atom.Category.Audio"},
 		{"user", "Atom.Category.User"},
 	};
 	return categories;
@@ -568,8 +630,9 @@ const std::vector<std::pair<std::string, std::string>> &presetCategories()
 const std::vector<AtomPreset> &builtinPresets()
 {
 	static const std::vector<AtomPreset> presets = [] {
-		std::vector<AtomPreset> list = {embers(),    fire(),       sparks(),   flare(),   smoke(), fog(),
-						magicDust(), runeCircle(), confetti(), bubbles(), snow(),  rain()};
+		std::vector<AtomPreset> list = {embers(), fire(),      sparks(),     flare(),    smoke(),
+						fog(),    magicDust(), runeCircle(), confetti(), bubbles(),
+						snow(),   rain(),      beatSparks()};
 		for (AtomPreset &preset : list) {
 			preset.builtin = true;
 			preset.config.design.presetId = preset.id;

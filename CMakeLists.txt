@@ -47,6 +47,8 @@ target_sources(
     src/atom-core/atom-config.hpp
     src/atom-core/atom-fields.hpp
     src/atom-core/atom-math.hpp
+    src/atom-core/atom-modulation.cpp
+    src/atom-core/atom-modulation.hpp
     src/atom-core/atom-modules.cpp
     src/atom-core/atom-modules.hpp
     src/atom-core/atom-noise.hpp
@@ -61,6 +63,8 @@ target_sources(
     src/atom-core/atom-value.hpp
     src/atom-core/atom-visual.cpp
     src/atom-core/atom-visual.hpp
+    src/obs/atom-audio-meter.cpp
+    src/obs/atom-audio-meter.hpp
     src/obs/atom-preset-store.cpp
     src/obs/atom-preset-store.hpp
     src/obs/atom-properties.cpp
@@ -73,6 +77,8 @@ target_sources(
     src/obs/atom-source.hpp
     src/obs/atom-sprite-cache.cpp
     src/obs/atom-sprite-cache.hpp
+    src/obs/atom-triggers.cpp
+    src/obs/atom-triggers.hpp
     src/ui/atom-ui.cpp
     src/ui/atom-ui.hpp
 )
@@ -93,5 +99,26 @@ if(ENABLE_QT)
 endif()
 
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17)
+
+# atom-core has no OBS or Qt dependency, so it can be tested on its own.
+option(ATOM_BUILD_TESTS "Build the atom-core test binary" OFF)
+
+if(ATOM_BUILD_TESTS)
+  enable_testing()
+  add_executable(
+    atom-core-tests
+    tests/atom-core-tests.cpp
+    src/atom-core/atom-config.cpp
+    src/atom-core/atom-modulation.cpp
+    src/atom-core/atom-modules.cpp
+    src/atom-core/atom-presets.cpp
+    src/atom-core/atom-system.cpp
+    src/atom-core/atom-value.cpp
+    src/atom-core/atom-visual.cpp
+  )
+  target_include_directories(atom-core-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_compile_features(atom-core-tests PRIVATE cxx_std_17)
+  add_test(NAME atom-core-tests COMMAND atom-core-tests)
+endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
