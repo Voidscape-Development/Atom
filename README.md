@@ -11,11 +11,15 @@ motion of an effect, with a live preview and a preset browser.
 
 ### Atom Emitter source
 
+Add **Atom Emitter** to a scene and press *Open Atom Designer…*. The OBS property page is
+deliberately just that button (plus *Clear Live Atoms*): the designer is the only place that can
+show a gradient, a curve and a live preview at once, and one editor cannot disagree with itself.
+
 | | |
 |---|---|
 | **Source size** | Width and height of the emitter surface. |
 | **Emitting location** | Single spot, bounding box (even or clustered), source edges, source center, circle/ring/arc, line, or polygon/star. Every shape has its own options. |
-| **Atom Design** | Opened with the *Open Atom Designer…* button — see below. |
+| **Atom Design** | Color, bloom, size, trail and fade path per atom layer — see below. |
 | **Atom Physics** | Gravity and gravity direction, initial speed, emit angle and spread, drag, turbulence, lifetime and lifetime falloff, spin, destination endpoint, and per-atom offsets. |
 
 ### Atom Physics
@@ -102,15 +106,24 @@ template and build the plugin on all three platforms.
 
 ## Roadmap
 
-Known gaps, roughly in priority order:
+Planned next:
 
-* Bloom is a per-atom additive glow quad rather than a full-screen post-process, and trails are
-  drawn as stretched sprite quads rather than a proper ribbon mesh.
+* **High-quality bloom as an option.** Keep the current per-atom additive glow as the default, and
+  add an opt-in post-process pass (render to texture, threshold, blur, composite) for emitters that
+  need light to bleed across atoms.
+* **Audio reactivity.** Drive emission rate, size or color from an audio source's level.
+* **Collision and attraction against other sources.** Atoms deflected by scene sources, not just by
+  the emitter bounds.
+* **Sprite sheet animation.** Animated atom frames from an image strip.
+* **Trigger API.** Fire bursts from a hotkey or obs-websocket, for alerts and celebrations.
+
+Known gaps:
+
+* Trails are drawn as stretched sprite quads rather than a proper ribbon mesh.
 * The endpoint "source in a scene" mode resolves the first scene that contains both the emitter and
   the target; an emitter used in several scenes at once picks the first match.
 * Sub-frame emission is not interpolated, so very high rates at low frame rates emit in visible
   clumps.
-* No audio reactivity, no collision against other sources, no sprite-sheet animation.
 * Only `en-US` translations so far.
 
 ## License

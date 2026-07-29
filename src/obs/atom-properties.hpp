@@ -27,14 +27,14 @@ namespace atom {
 /// Every parameter the emitter source stores in its settings: the emission and physics field
 /// tables plus the flat, per-module parameters of every registered shape and falloff.
 ///
-/// Both the property page and its visibility callback are generated from this, so registering a
-/// new module is enough to make it appear in the UI.
+/// Nothing in the property page is generated from this any more (the designer owns editing), but
+/// it stays the canonical description of an emitter's settings for serialization and for tooling
+/// that needs to enumerate them.
 const ParamSchema &fullEmitterSchema();
 
 /// Builds the OBS property page for an Atom Emitter.
+///
+/// Editing happens in the Atom Designer, so the page itself is just the way in.
 obs_properties_t *buildEmitterProperties(obs_source_t *self);
-
-/// Re-applies every visibility rule. Used as the property modified callback.
-void applyVisibility(obs_properties_t *props, obs_data_t *settings);
 
 } // namespace atom
