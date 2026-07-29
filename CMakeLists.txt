@@ -21,7 +21,15 @@ if(ENABLE_FRONTEND_API)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
 endif()
 
+# The CI build scripts pass QT_VERSION; accept it so CMake does not warn that it went unused.
+set(QT_VERSION 6 CACHE STRING "Qt version used by the plugin (only 6 is supported)")
+mark_as_advanced(QT_VERSION)
+
 if(ENABLE_QT)
+  if(NOT QT_VERSION EQUAL 6)
+    message(FATAL_ERROR "Atom requires Qt 6; QT_VERSION is set to ${QT_VERSION}.")
+  endif()
+
   find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
   target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE ATOM_ENABLE_QT)
