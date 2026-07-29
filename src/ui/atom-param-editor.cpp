@@ -18,6 +18,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include "atom-param-editor.hpp"
 #include "atom-value-editors.hpp"
+#include "atom-core/atom-fields.hpp"
 #include "atom-core/atom-registry.hpp"
 
 #include <QCheckBox>

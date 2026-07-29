@@ -274,7 +274,7 @@ void GradientEditor::mouseDoubleClickEvent(QMouseEvent *event)
 
 void GradientEditor::contextMenuEvent(QContextMenuEvent *event)
 {
-	const int index = stopAt(event->position().toPoint());
+	const int index = stopAt(event->pos());
 	if (index < 0 || gradient_.stops.size() <= 2)
 		return;
 
@@ -444,7 +444,7 @@ void CurveEditor::mouseDoubleClickEvent(QMouseEvent *event)
 
 void CurveEditor::contextMenuEvent(QContextMenuEvent *event)
 {
-	const int index = pointAt(event->position().toPoint());
+	const int index = pointAt(event->pos());
 	if (index < 0 || curve_.points.size() <= 2)
 		return;
 
