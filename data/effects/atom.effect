@@ -1,0 +1,133 @@
+// Atom - Particle system plugin for OBS Studio
+//
+// Draw       : atom sprites as textured quads modulated by a per-vertex colour.
+// BrightPass : keeps only what is brighter than a threshold, for the optional bloom pass.
+// Blur       : separable Gaussian, run once per axis per iteration.
+// Composite  : adds a blurred buffer back over the scene.
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+// Bloom parameters.
+uniform float threshold = 0.65;
+uniform float intensity = 1.0;
+uniform float2 texel = {0.0, 0.0};
+
+sampler_state atomSampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertInOut {
+	float4 pos   : POSITION;
+	float2 uv    : TEXCOORD0;
+	float4 color : COLOR;
+};
+
+struct SpriteInOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertInOut VSAtom(VertInOut vert_in)
+{
+	VertInOut vert_out;
+	vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv = vert_in.uv;
+	vert_out.color = vert_in.color;
+	return vert_out;
+}
+
+SpriteInOut VSSprite(SpriteInOut vert_in)
+{
+	SpriteInOut vert_out;
+	vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv = vert_in.uv;
+	return vert_out;
+}
+
+float4 PSAtom(VertInOut vert_in) : TARGET
+{
+	float4 texel_color = image.Sample(atomSampler, vert_in.uv);
+	return texel_color * vert_in.color;
+}
+
+float4 PSBrightPass(SpriteInOut vert_in) : TARGET
+{
+	float4 color = image.Sample(atomSampler, vert_in.uv);
+
+	// The atom buffer is premultiplied, so luminance is already weighted by coverage.
+	float luma = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+	float keep = max(luma - threshold, 0.0) / max(1.0 - threshold, 0.0001);
+	return float4(color.rgb * keep, color.a * keep);
+}
+
+float4 PSBlur(SpriteInOut vert_in) : TARGET
+{
+	// Nine-tap Gaussian; `texel` carries both the direction and the step size.
+	float weights[5] = {0.227027, 0.194594, 0.121621, 0.054054, 0.016216};
+
+	float4 sum = image.Sample(atomSampler, vert_in.uv) * weights[0];
+	for (int i = 1; i < 5; i++) {
+		float2 offset = texel * float(i);
+		sum += image.Sample(atomSampler, vert_in.uv + offset) * weights[i];
+		sum += image.Sample(atomSampler, vert_in.uv - offset) * weights[i];
+	}
+	return sum;
+}
+
+float4 PSComposite(SpriteInOut vert_in) : TARGET
+{
+	return image.Sample(atomSampler, vert_in.uv) * intensity;
+}
+
+float4 PSCopy(SpriteInOut vert_in) : TARGET
+{
+	return image.Sample(atomSampler, vert_in.uv);
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSAtom(vert_in);
+		pixel_shader  = PSAtom(vert_in);
+	}
+}
+
+technique BrightPass
+{
+	pass
+	{
+		vertex_shader = VSSprite(vert_in);
+		pixel_shader  = PSBrightPass(vert_in);
+	}
+}
+
+technique Blur
+{
+	pass
+	{
+		vertex_shader = VSSprite(vert_in);
+		pixel_shader  = PSBlur(vert_in);
+	}
+}
+
+technique Composite
+{
+	pass
+	{
+		vertex_shader = VSSprite(vert_in);
+		pixel_shader  = PSComposite(vert_in);
+	}
+}
+
+technique Copy
+{
+	pass
+	{
+		vertex_shader = VSSprite(vert_in);
+		pixel_shader  = PSCopy(vert_in);
+	}
+}
