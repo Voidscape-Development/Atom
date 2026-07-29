@@ -22,6 +22,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "obs/atom-preset-store.hpp"
 #include "obs/atom-source.hpp"
 #include "atom-core/atom-modules.hpp"
+#include "atom-core/atom-modulation.hpp"
 #include "atom-core/atom-registry.hpp"
 
 #include <QCheckBox>
@@ -1008,9 +1009,9 @@ void AtomDesignerDialog::refreshRoutesList()
 		}
 
 		QListWidgetItem *item = new QListWidgetItem(
-			QString("%1 \u2192 %2")
+			QString("%1 %2 %3")
 				.arg(info ? text(info->label) : QString::fromStdString(route.modulatorId),
-				     targetLabel));
+				     QString(QChar(0x2192)), targetLabel));
 		item->setData(Qt::UserRole, static_cast<int>(i));
 		item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
 		item->setCheckState(route.enabled ? Qt::Checked : Qt::Unchecked);
