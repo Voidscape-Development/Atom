@@ -36,6 +36,7 @@ runs:
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
         echo "/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin" >> $GITHUB_PATH
         echo "/home/linuxbrew/.linuxbrew/opt/clang-format@19/bin" >> $GITHUB_PATH
+        brew update --quiet
         brew install --quiet zsh
         echo ::endgroup::
 
@@ -55,6 +56,7 @@ runs:
         # bottles with "unknown install step: run". Updating first is what the error
         # message itself asks for, and the runner disables auto-update.
         brew update --quiet
+        brew trust obsproject/tools
         brew install --quiet obsproject/tools/clang-format@19
         print ::endgroup::
 
