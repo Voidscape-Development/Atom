@@ -53,18 +53,46 @@ Color rotateHue(const Color &color, float turns)
 DesignEvaluator::DesignEvaluator() = default;
 DesignEvaluator::~DesignEvaluator() = default;
 
+void DesignEvaluator::setRender(const RenderConfig &render)
+{
+	render_ = render;
+	perAtomBloom_ = render_.usesPerAtomBloom();
+}
+
+void DesignEvaluator::cacheValues(const PhysicsConfig &physics)
+{
+	customFalloff_ = physics.falloffId == "custom";
+	if (customFalloff_)
+		falloffCurve_ = physics.falloffCurve;
+
+	// Layers are only ever added or removed through rebuild(); a value refresh keeps the count.
+	const size_t count = std::min(modules_.size(), design_.layers.size());
+	for (size_t i = 0; i < count; ++i) {
+		const AtomLayer &layer = design_.layers[i];
+		LayerModules &modules = modules_[i];
+		modules.additive = layer.blendId == "additive";
+		modules.customFade = layer.fade.pathId == "custom";
+		modules.colorMode =
+			layer.color.modeId == "solid"
+				? ColorMode::Solid
+				: (layer.color.modeId == "random_stop" ? ColorMode::RandomStop : ColorMode::Gradient);
+		modules.sheetMode = layer.sheet.modeId == "random"
+					    ? SheetMode::Random
+					    : (layer.sheet.modeId == "loop" ? SheetMode::Loop : SheetMode::OverLife);
+	}
+}
+
 void DesignEvaluator::refreshValues(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render)
 {
 	design_ = design;
-	physics_ = physics;
-	render_ = render;
+	setRender(render);
+	cacheValues(physics);
 }
 
 void DesignEvaluator::rebuild(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render)
 {
 	design_ = design;
-	physics_ = physics;
-	render_ = render;
+	setRender(render);
 
 	falloff_ = FalloffRegistry::instance().create(physics.falloffId);
 	if (!falloff_)
@@ -88,13 +116,15 @@ void DesignEvaluator::rebuild(const AtomDesign &design, const PhysicsConfig &phy
 				modules.trail->configure(layer.trail.styleParams);
 		}
 	}
+
+	cacheValues(physics);
 }
 
 float DesignEvaluator::shapedAge(const Atom &atom) const
 {
 	const float t = atom.normalizedAge();
-	if (physics_.falloffId == "custom")
-		return saturate(physics_.falloffCurve.sample(t));
+	if (customFalloff_)
+		return saturate(falloffCurve_.sample(t));
 	return falloff_ ? saturate(falloff_->shape(t)) : t;
 }
 
@@ -108,14 +138,15 @@ const TrailStyle *DesignEvaluator::trailStyleFor(const Atom &atom) const
 	return atom.layer < modules_.size() ? modules_[atom.layer].trail.get() : nullptr;
 }
 
-Color DesignEvaluator::evaluateColor(const AtomLayer &layer, const Atom &atom, float t) const
+Color DesignEvaluator::evaluateColor(const AtomLayer &layer, const LayerModules &modules, const Atom &atom,
+				     float t) const
 {
 	const ColorConfig &color = layer.color;
 
-	if (color.modeId == "solid")
+	if (modules.colorMode == ColorMode::Solid)
 		return color.color;
 
-	if (color.modeId == "random_stop") {
+	if (modules.colorMode == ColorMode::RandomStop) {
 		const std::vector<GradientStop> &stops = color.gradient.stops;
 		if (stops.empty())
 			return color.color;
@@ -132,13 +163,14 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 	visual.position = atom.pos;
 	visual.rotation = atom.rotation;
 
-	const AtomLayer *layer = layerFor(atom);
-	if (!layer)
+	if (atom.layer >= design_.layers.size() || atom.layer >= modules_.size())
 		return visual;
+	const AtomLayer *layer = &design_.layers[atom.layer];
+	const LayerModules &modules = modules_[atom.layer];
 
 	const float t = shapedAge(atom);
 	visual.shapedAge = t;
-	visual.additive = layer->blendId == "additive";
+	visual.additive = modules.additive;
 
 	// Size over life, then the emitter's global trim.
 	const float sizeScale = layer->size.overLife.points.empty() ? 1.0f : layer->size.overLife.sample(t);
@@ -155,9 +187,9 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 		const int span = last - first + 1;
 
 		int frame = first;
-		if (layer->sheet.modeId == "random") {
+		if (modules.sheetMode == SheetMode::Random) {
 			frame = first + static_cast<int>(atom.randomC * static_cast<float>(span));
-		} else if (layer->sheet.modeId == "loop") {
+		} else if (modules.sheetMode == SheetMode::Loop) {
 			frame = first + static_cast<int>(atom.age * std::max(0.01f, layer->sheet.fps)) % span;
 		} else {
 			frame = first + static_cast<int>(t * static_cast<float>(span));
@@ -173,16 +205,15 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 	}
 
 	// Colour over life.
-	Color color = evaluateColor(*layer, atom, t);
+	Color color = evaluateColor(*layer, modules, atom, t);
 	color = rotateHue(color, atom.hueShift);
 	color.r *= atom.tint.r;
 	color.g *= atom.tint.g;
 	color.b *= atom.tint.b;
 
 	// Alpha over life: fade path, fade-in ramp, flicker, then per-atom alpha offset.
-	const FadePath *fade = atom.layer < modules_.size() ? modules_[atom.layer].fade.get() : nullptr;
-	float alpha = layer->fade.pathId == "custom" ? layer->fade.customCurve.sample(t)
-						     : (fade ? fade->alpha(t, atom) : 1.0f - t);
+	const FadePath *fade = modules.fade.get();
+	float alpha = modules.customFade ? layer->fade.customCurve.sample(t) : (fade ? fade->alpha(t, atom) : 1.0f - t);
 
 	if (layer->fade.fadeIn > 1e-4f && t < layer->fade.fadeIn)
 		alpha *= t / layer->fade.fadeIn;
@@ -199,7 +230,7 @@ AtomVisual DesignEvaluator::evaluate(const Atom &atom) const
 	// Bloom is drawn as a larger, dimmer quad behind the atom: cheap, and it reads as either a
 	// light source or a puff of smoke depending on softness.
 	const float bloomAmount = layer->bloom.amount * std::max(0.0f, render_.bloomScale);
-	if (render_.usesPerAtomBloom() && bloomAmount > 1e-3f) {
+	if (perAtomBloom_ && bloomAmount > 1e-3f) {
 		visual.bloomSize = visual.size * std::max(1.0f, layer->bloom.radius);
 		visual.bloomAlpha = saturate(color.a * bloomAmount * lerp(1.0f, 0.55f, layer->bloom.softness));
 		visual.bloomColor = layer->bloom.inheritColor ? color : layer->bloom.tint;

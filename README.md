@@ -32,15 +32,31 @@ show a gradient, a curve and a live preview at once, and one editor cannot disag
 * **Destination endpoint** — nothing, a fixed point, or another source in the scene. Atoms can be
   attracted, made to arrive exactly as their life runs out, or put into orbit; they can be removed
   on arrival, and each atom can aim at a slightly scattered target.
-* **Offset** — position, angle, speed, size, lifetime, rotation, hue, brightness, opacity and spawn
-  phase variance. Zero everywhere means every atom emits identically.
 * **Extra forces** — optional wind, vortex, wander, bounds (bounce / wrap / remove), plus collision
   and attraction against other sources in the scene, each with their own parameters.
 
 ### Atom Design
 
-The designer is laid out like OBS' *Add Source* dialog: categories on the left, a preset grid or a
-property page on the right, and a live preview underneath.
+The designer has three columns, and each answers one question:
+
+* **Outline (left) — what is this effect made of?** Emitter, Atoms, Motion, Reacts to and Output.
+  It is the only place anything is selected. Each kind of atom opens to show everything that
+  belongs to it: shape and blending, size, glow, trail, color and fade over life, and variation.
+  Tick boxes switch a kind of atom, a force or a link off without deleting it.
+* **Preview (middle) — what does it look like?** The selection is drawn into it: the kind of atom
+  being edited stays bright while the others dim, the emitter shape is marked out, and the launch
+  direction and the destination can be aimed by dragging in the preview. Underneath, the **life
+  tracks** put the selected atom's color, size and opacity on one birth-to-death axis.
+* **Inspector (right) — what am I changing?** It always names the selection and says how far it
+  reaches: one kind of atom, or the whole emitter.
+
+*Presets and revert…* above the outline opens a pop-up with every preset, the effect as it is now
+and the effect as it was when the designer was opened. Clicking one only shows it in the preview;
+*Use this* applies it. Undo and redo cover everything, preset changes included.
+
+Every numeric emitter-wide setting has a small wave button at the end of its row. It opens the
+link that drives that setting from audio, an LFO or noise, creating one if there is none, and says
+in the setting's own units how far it will move.
 
 * **Color** — a single color, a lifetime gradient with as many stops as you like (drag to move,
   double-click to add or recolor, right-click to remove), or a random color picked per atom.
@@ -53,6 +69,10 @@ property page on the right, and a live preview underneath.
   own image.
 * **Sprite sheets** — animate an atom from a grid of frames in an image, spread over its life,
   looping at a fixed rate, or one random frame per atom.
+* **Variation** — how much one atom differs from the next: position, angle, speed, size, lifetime,
+  rotation, hue, brightness, opacity and spawn phase. It is set per kind of atom, so sparks can
+  scatter while the flames they rise from stay even. Zero everywhere means every atom of that kind
+  emits identically.
 * **Layers** — a design can hold several kinds of atom, each with its own spawn weight, so one
   emitter can produce e.g. flames *and* sparks.
 
@@ -63,7 +83,7 @@ property page on the right, and a live preview underneath.
 * **Audio reactivity** — point Atom at any audio source; it meters overall level, peak and three
   bands, then any number of **modulation routes** drive parameters from it.
 * **Modulation** — routes can be driven by audio, an LFO or smooth noise, and can target *any*
-  numeric emission, physics or render parameter (40 of them today), adding to it, scaling it or
+  numeric emission, physics or render parameter (30 of them today), adding to it, scaling it or
   replacing it, with per-route smoothing.
 * **Tracked sources** — name other sources (or track the whole scene) and the collision and
   attraction forces act on their live on-screen rectangles.
@@ -133,6 +153,17 @@ cmake --build --preset ubuntu-x86_64
 cmake -B build-tests -DATOM_BUILD_TESTS=ON \
       -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"
 cmake --build build-tests --target atom-core-tests && ./build-tests/atom-core-tests
+```
+
+The same option builds `atom-core-bench`, which prints the per-frame cost of the simulation, the
+design evaluator and modulation for a stress emitter and every built-in preset, plus a checksum of
+what was simulated. Run it in a release configuration before and after touching a hot path: the
+timings show what the change bought, and an unchanged checksum shows the atoms still do the same
+thing.
+
+```sh
+cmake -B build-bench -DATOM_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-bench --target atom-core-bench && ./build-bench/atom-core-bench
 ```
 
 The build scripts in `.github/scripts` and the workflows in `.github/workflows` come from the

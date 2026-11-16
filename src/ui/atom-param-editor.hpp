@@ -48,8 +48,15 @@ public:
 	/// Names offered by SourceRef parameters.
 	void setSourceNames(const QStringList &names);
 
+	/// Gives numeric rows a button for driving them from audio or a wave. `linkable` holds the
+	/// parameter ids that get one and `linked` the ones something already drives, which are
+	/// drawn lit. Call before setSchema().
+	void setLinks(const QStringList &linkable, const QStringList &linked);
+
 signals:
 	void valueChanged(const QString &id);
+	/// The link button of a row was pressed.
+	void linkRequested(const QString &id);
 
 private:
 	struct Row {
@@ -67,6 +74,8 @@ private:
 	ParamBag bag_;
 	std::vector<Row> rows_;
 	QStringList sourceNames_;
+	QStringList linkable_;
+	QStringList linked_;
 	bool updating_ = false;
 };
 

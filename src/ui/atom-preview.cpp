@@ -20,7 +20,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "obs/atom-sprite-cache.hpp"
 
 #include <QDateTime>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
+
+#include <obs-module.h>
 
 #include <map>
 #include <vector>
@@ -31,6 +35,10 @@ namespace ui {
 namespace {
 
 constexpr uint32_t kMaskResolution = 64;
+/// How faint atoms of the kinds that are not being edited are drawn.
+constexpr float kDimmedAlpha = 0.18f;
+/// Points sampled from the emitter shape to draw its outline.
+constexpr int kShapeSamples = 260;
 
 /// CPU-side sprite masks, keyed exactly like the GPU sprite cache.
 const std::vector<uint8_t> &maskFor(const std::string &spriteId, const ParamBag &params)
@@ -56,7 +64,8 @@ struct Canvas {
 	{
 		width = w;
 		height = h;
-		rgb.assign(static_cast<size_t>(w) * h * 3, 0.0f);
+		// resize() keeps the allocation from the previous frame; every texel is written below.
+		rgb.resize(static_cast<size_t>(w) * h * 3);
 		for (size_t i = 0; i < rgb.size(); i += 3) {
 			rgb[i + 0] = static_cast<float>(background.redF());
 			rgb[i + 1] = static_cast<float>(background.greenF());
@@ -139,8 +148,16 @@ ParamBag bloomParams(const BloomConfig &bloom)
 	return params;
 }
 
-void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const AtomLayer &layer, const AtomVisual &visual,
-	       float scale, const Vec2 &offset)
+/// The masks one layer draws with, looked up once per frame. Building a cache key means
+/// formatting strings, which is far too slow to do for every atom.
+struct LayerMasks {
+	const std::vector<uint8_t> *sprite = nullptr;
+	const std::vector<uint8_t> *glow = nullptr;
+	bool additive = true;
+};
+
+void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const AtomLayer &layer, const LayerMasks &masks,
+	       const AtomVisual &visual, float scale, const Vec2 &offset)
 {
 	const std::vector<TrailHistory> &trails = system.trails();
 	if (index >= trails.size())
@@ -152,9 +169,9 @@ void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const Ato
 
 	const Atom &atom = system.atoms()[index];
 	const TrailStyle *style = system.evaluator().trailStyleFor(atom);
-	const std::vector<uint8_t> &mask = maskFor(layer.spriteId, layer.spriteParams);
+	const std::vector<uint8_t> &mask = *masks.sprite;
 	const Color base = layer.trail.inheritColor ? visual.color : layer.trail.tint;
-	const bool additive = layer.blendId == "additive";
+	const bool additive = masks.additive;
 
 	const size_t samples = std::min<size_t>(history.count, static_cast<size_t>(std::max(2, layer.trail.segments)));
 	Vec2 previous = atom.pos;
@@ -190,9 +207,10 @@ void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const Ato
 
 } // namespace
 
-QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor &background)
+QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor &background, int highlightLayer)
 {
-	Canvas canvas;
+	// Only ever called from the UI thread, so one canvas can be reused for every frame.
+	static Canvas canvas;
 	canvas.reset(std::max(1, size.width()), std::max(1, size.height()), background);
 
 	// Fit the emitter surface into the widget, letterboxing to keep the aspect ratio honest.
@@ -205,27 +223,41 @@ QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor
 	const DesignEvaluator &evaluator = system.evaluator();
 	const std::vector<Atom> &atoms = system.atoms();
 
+	static std::vector<LayerMasks> layerMasks;
+	layerMasks.resize(design.layers.size());
+	for (size_t i = 0; i < design.layers.size(); ++i) {
+		const AtomLayer &layer = design.layers[i];
+		layerMasks[i].sprite = &maskFor(layer.spriteId, layer.spriteParams);
+		layerMasks[i].glow = &maskFor("soft_circle", bloomParams(layer.bloom));
+		layerMasks[i].additive = layer.blendId == "additive";
+	}
+
 	for (size_t i = 0; i < atoms.size(); ++i) {
 		const Atom &atom = atoms[i];
 		if (atom.layer >= design.layers.size())
 			continue;
 
 		const AtomLayer &layer = design.layers[atom.layer];
-		const AtomVisual visual = evaluator.evaluate(atom);
+		const LayerMasks &masks = layerMasks[atom.layer];
+		AtomVisual visual = evaluator.evaluate(atom);
+		if (highlightLayer >= 0 && static_cast<int>(atom.layer) != highlightLayer) {
+			visual.color.a *= kDimmedAlpha;
+			visual.bloomAlpha *= kDimmedAlpha;
+			visual.bloomColor.a *= kDimmedAlpha;
+		}
 		if (visual.color.a <= 0.002f && visual.bloomAlpha <= 0.002f)
 			continue;
 
 		if (layer.trail.enabled && system.trailsEnabled())
-			drawTrail(canvas, system, i, layer, visual, scale, offset);
+			drawTrail(canvas, system, i, layer, masks, visual, scale, offset);
 
 		if (visual.bloomAlpha > 0.002f) {
-			drawSprite(canvas, maskFor("soft_circle", bloomParams(layer.bloom)),
-				   visual.position * scale + offset, visual.bloomSize * scale, 0.0f, visual.bloomColor,
-				   true);
+			drawSprite(canvas, *masks.glow, visual.position * scale + offset, visual.bloomSize * scale,
+				   0.0f, visual.bloomColor, true);
 		}
 
-		drawSprite(canvas, maskFor(layer.spriteId, layer.spriteParams), visual.position * scale + offset,
-			   visual.size * scale, visual.rotation, visual.color, layer.blendId == "additive");
+		drawSprite(canvas, *masks.sprite, visual.position * scale + offset, visual.size * scale,
+			   visual.rotation, visual.color, masks.additive);
 	}
 
 	return canvas.toImage();
@@ -251,7 +283,7 @@ AtomPreview::AtomPreview(QWidget *parent) : QWidget(parent)
 	system_ = std::make_unique<AtomSystem>();
 
 	connect(&timer_, &QTimer::timeout, this, &AtomPreview::tick);
-	timer_.start(16);
+	timer_.setInterval(16);
 	lastTick_ = QDateTime::currentMSecsSinceEpoch();
 }
 
@@ -265,6 +297,7 @@ QSize AtomPreview::sizeHint() const
 void AtomPreview::setConfig(const EmitterConfig &config)
 {
 	base_ = config;
+	resampleShape();
 	modulation_.setRoutes(config.modulation);
 	system_->configure(config);
 	update();
@@ -303,22 +336,210 @@ void AtomPreview::tick()
 	ModContext modContext;
 	modContext.time = time_;
 	modContext.dt = dt;
-	if (modulation_.apply(base_, modContext, modulated_))
-		system_->setModulatedConfig(modulated_);
+	system_->updateValues([&](EmitterConfig &live) { return modulation_.applyInPlace(base_, modContext, live); });
 
 	SimContext context;
 	system_->update(dt, context);
 	update();
 }
 
+void AtomPreview::showEvent(QShowEvent *event)
+{
+	QWidget::showEvent(event);
+	// The timer only runs while there is something on screen to animate.
+	lastTick_ = QDateTime::currentMSecsSinceEpoch();
+	timer_.start();
+}
+
+void AtomPreview::hideEvent(QHideEvent *event)
+{
+	timer_.stop();
+	QWidget::hideEvent(event);
+}
+
+void AtomPreview::setOverlay(Overlay overlay)
+{
+	overlay_ = overlay;
+	setCursor(overlay == Overlay::Launch || overlay == Overlay::Target ? Qt::CrossCursor : Qt::ArrowCursor);
+	update();
+}
+
+void AtomPreview::setHighlightLayer(int layer)
+{
+	highlightLayer_ = layer;
+	update();
+}
+
+void AtomPreview::setChecker(bool checker)
+{
+	checker_ = checker;
+	update();
+}
+
+void AtomPreview::burst(int count)
+{
+	system_->burst(count);
+	update();
+}
+
+void AtomPreview::resampleShape()
+{
+	shapeSamples_.clear();
+	shapeCenter_ =
+		Vec2{static_cast<float>(base_.emission.width) * 0.5f, static_cast<float>(base_.emission.height) * 0.5f};
+
+	// The shape module itself says where atoms can appear, so any registered shape gets an
+	// outline here without the preview knowing what it is.
+	std::unique_ptr<EmitterShape> shape = EmitterShapeRegistry::instance().create(base_.emission.shapeId);
+	if (!shape)
+		return;
+	ParamBag params = base_.emission.shapeParams;
+	params.applyDefaults(EmitterShapeRegistry::instance().schemaFor(base_.emission.shapeId));
+	shape->configure(params);
+
+	SimContext context;
+	context.width = static_cast<float>(base_.emission.width);
+	context.height = static_cast<float>(base_.emission.height);
+
+	Random random(0x5EEDu);
+	Vec2 sum;
+	shapeSamples_.reserve(kShapeSamples);
+	for (int i = 0; i < kShapeSamples; ++i) {
+		const Vec2 point = shape->sample(random, context).position;
+		shapeSamples_.push_back(point);
+		sum += point;
+	}
+	shapeCenter_ = sum * (1.0f / static_cast<float>(kShapeSamples));
+}
+
+void AtomPreview::mapping(float &scale, QPointF &offset) const
+{
+	// Must match renderAtomFrame(), which letterboxes the emitter surface into the widget.
+	const float w = std::max(1.0f, system_->width());
+	const float h = std::max(1.0f, system_->height());
+	scale = std::min(static_cast<float>(width()) / w, static_cast<float>(height()) / h);
+	offset = QPointF((static_cast<float>(width()) - w * scale) * 0.5f,
+			 (static_cast<float>(height()) - h * scale) * 0.5f);
+}
+
+void AtomPreview::mousePressEvent(QMouseEvent *event)
+{
+	mouseMoveEvent(event);
+}
+
+void AtomPreview::mouseMoveEvent(QMouseEvent *event)
+{
+	if (!(event->buttons() & Qt::LeftButton))
+		return;
+	if (overlay_ != Overlay::Launch && overlay_ != Overlay::Target)
+		return;
+
+	float scale = 1.0f;
+	QPointF offset;
+	mapping(scale, offset);
+	if (scale <= 0.0f)
+		return;
+	emit dragged((event->position() - offset) / scale);
+}
+
+void AtomPreview::paintOverlay(QPainter &painter)
+{
+	if (overlay_ == Overlay::None)
+		return;
+
+	float scale = 1.0f;
+	QPointF offset;
+	mapping(scale, offset);
+	const auto toWidget = [&](const Vec2 &p) {
+		return QPointF(p.x * scale, p.y * scale) + offset;
+	};
+
+	const QColor accent = palette().color(QPalette::Highlight);
+	painter.setRenderHint(QPainter::Antialiasing, true);
+
+	// The emitter shape is context for every overlay: faint behind an arrow, bright on its own.
+	QColor dot = accent.lighter(150);
+	dot.setAlpha(overlay_ == Overlay::Shape ? 230 : 90);
+	painter.setPen(Qt::NoPen);
+	painter.setBrush(dot);
+	for (const Vec2 &sample : shapeSamples_)
+		painter.drawEllipse(toWidget(sample), 1.6, 1.6);
+
+	if (overlay_ == Overlay::Shape) {
+		// The emitter surface itself, so its size on the canvas is visible too.
+		QColor frame = accent.lighter(150);
+		frame.setAlpha(120);
+		painter.setBrush(Qt::NoBrush);
+		painter.setPen(QPen(frame, 1.0, Qt::DashLine));
+		painter.drawRect(
+			QRectF(toWidget(Vec2{0.0f, 0.0f}), toWidget(Vec2{system_->width(), system_->height()})));
+		return;
+	}
+
+	if (overlay_ == Overlay::Launch) {
+		if (base_.emission.directionModeId != "angle")
+			return;
+
+		const QPointF origin = toWidget(shapeCenter_);
+		const float length = std::max(60.0f, std::min(width(), height()) * 0.3f);
+		const float angle = base_.physics.emitAngle;
+		const float half = std::min(180.0f, base_.physics.emitSpread * 0.5f);
+
+		// Spread, as a fan around the launch direction.
+		QColor fan = accent;
+		fan.setAlpha(60);
+		painter.setPen(QPen(accent.lighter(150), 1.0, Qt::DashLine));
+		painter.setBrush(fan);
+		const QRectF arc(origin.x() - length, origin.y() - length, length * 2.0f, length * 2.0f);
+		// Qt measures pie angles counter-clockwise from three o'clock, in sixteenths of a degree,
+		// while emitter angles run clockwise because y points down.
+		painter.drawPie(arc, static_cast<int>(-(angle + half) * 16.0f), static_cast<int>(half * 2.0f * 16.0f));
+
+		const Vec2 direction = angleToVector(angle);
+		const QPointF tip = origin + QPointF(direction.x, direction.y) * length;
+		painter.setPen(QPen(Qt::white, 2.0, Qt::SolidLine, Qt::RoundCap));
+		painter.drawLine(origin, tip);
+		const Vec2 left = angleToVector(angle + 150.0f);
+		const Vec2 right = angleToVector(angle - 150.0f);
+		painter.drawLine(tip, tip + QPointF(left.x, left.y) * 12.0);
+		painter.drawLine(tip, tip + QPointF(right.x, right.y) * 12.0);
+		return;
+	}
+
+	if (overlay_ == Overlay::Target) {
+		if (base_.physics.endpoint.modeId != "point")
+			return;
+		const QPointF target = toWidget(Vec2{base_.physics.endpoint.point.x * system_->width(),
+						     base_.physics.endpoint.point.y * system_->height()});
+		painter.setBrush(Qt::NoBrush);
+		painter.setPen(QPen(Qt::white, 2.0));
+		painter.drawEllipse(target, 9.0, 9.0);
+		painter.drawLine(target - QPointF(15.0, 0.0), target + QPointF(15.0, 0.0));
+		painter.drawLine(target - QPointF(0.0, 15.0), target + QPointF(0.0, 15.0));
+	}
+}
+
 void AtomPreview::paintEvent(QPaintEvent *)
 {
 	QPainter painter(this);
-	painter.drawImage(0, 0, renderAtomFrame(*system_, size(), background_));
+	painter.drawImage(0, 0, renderAtomFrame(*system_, size(), background_, highlightLayer_));
+
+	if (checker_) {
+		// Atoms were drawn over a flat backdrop; lay a faint grid on top so see-through areas
+		// read as see-through without a second render path.
+		QColor tile(255, 255, 255, 18);
+		const int cell = 16;
+		for (int y = 0; y < height(); y += cell) {
+			for (int x = (y / cell) % 2 ? cell : 0; x < width(); x += cell * 2)
+				painter.fillRect(x, y, cell, cell, tile);
+		}
+	}
+
+	paintOverlay(painter);
 
 	painter.setPen(QColor(200, 200, 210, 160));
-	painter.drawText(rect().adjusted(6, 4, -6, -4), Qt::AlignTop | Qt::AlignRight,
-			 QString("%1 atoms").arg(system_->count()));
+	painter.drawText(rect().adjusted(8, 6, -8, -6), Qt::AlignTop | Qt::AlignRight,
+			 QString::fromUtf8(obs_module_text("Atom.Designer.AtomCount")).arg(system_->count()));
 }
 
 } // namespace ui

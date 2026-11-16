@@ -128,7 +128,17 @@ struct SceneObject {
 	/// to push against.
 	float distance(const Vec2 &point, Vec2 &normal) const
 	{
-		const Vec2 local = toLocal(point);
+		// One sine and cosine serve both directions of the transform; collision asks this for
+		// every atom against every tracked object.
+		const float radians = deg2rad(rotation);
+		const float c = std::cos(radians);
+		const float s = std::sin(radians);
+		const auto toWorld = [c, s](const Vec2 &v) {
+			return Vec2{v.x * c - v.y * s, v.x * s + v.y * c};
+		};
+
+		const Vec2 delta = point - center;
+		const Vec2 local{delta.x * c + delta.y * s, delta.y * c - delta.x * s};
 		const Vec2 half{std::max(0.5f, halfSize.x), std::max(0.5f, halfSize.y)};
 		const Vec2 outside{std::abs(local.x) - half.x, std::abs(local.y) - half.y};
 
@@ -136,14 +146,14 @@ struct SceneObject {
 			const Vec2 clamped{std::max(outside.x, 0.0f), std::max(outside.y, 0.0f)};
 			const Vec2 localNormal{clamped.x > 0.0f ? (local.x < 0.0f ? -1.0f : 1.0f) : 0.0f,
 					       clamped.y > 0.0f ? (local.y < 0.0f ? -1.0f : 1.0f) : 0.0f};
-			normal = toWorldDirection(localNormal.normalized());
+			normal = toWorld(localNormal.normalized());
 			return clamped.length();
 		}
 
 		// Inside: leave through the nearest face.
 		const Vec2 localNormal = outside.x > outside.y ? Vec2{local.x < 0.0f ? -1.0f : 1.0f, 0.0f}
 							       : Vec2{0.0f, local.y < 0.0f ? -1.0f : 1.0f};
-		normal = toWorldDirection(localNormal);
+		normal = toWorld(localNormal);
 		return std::max(outside.x, outside.y);
 	}
 

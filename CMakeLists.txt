@@ -99,6 +99,8 @@ if(ENABLE_QT)
       src/ui/atom-designer-dialog.hpp
       src/ui/atom-param-editor.cpp
       src/ui/atom-param-editor.hpp
+      src/ui/atom-preset-panel.cpp
+      src/ui/atom-preset-panel.hpp
       src/ui/atom-preview.cpp
       src/ui/atom-preview.hpp
       src/ui/atom-value-editors.cpp
@@ -127,6 +129,22 @@ if(ATOM_BUILD_TESTS)
   target_include_directories(atom-core-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_compile_features(atom-core-tests PRIVATE cxx_std_17)
   add_test(NAME atom-core-tests COMMAND atom-core-tests)
+
+  # Per-frame cost of the simulation, the evaluator and modulation. Not a test: run it by hand, in
+  # a release configuration, before and after touching a hot path.
+  add_executable(
+    atom-core-bench
+    tests/atom-core-bench.cpp
+    src/atom-core/atom-config.cpp
+    src/atom-core/atom-modulation.cpp
+    src/atom-core/atom-modules.cpp
+    src/atom-core/atom-presets.cpp
+    src/atom-core/atom-system.cpp
+    src/atom-core/atom-value.cpp
+    src/atom-core/atom-visual.cpp
+  )
+  target_include_directories(atom-core-bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_compile_features(atom-core-bench PRIVATE cxx_std_17)
 endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

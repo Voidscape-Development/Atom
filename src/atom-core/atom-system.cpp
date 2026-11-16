@@ -107,6 +107,8 @@ void AtomSystem::applyConfig(const EmitterConfig &config, bool allowPrewarm)
 	else
 		rebuildModules();
 
+	cacheModes();
+
 	context_.width = width();
 	context_.height = height();
 
@@ -126,12 +128,43 @@ void AtomSystem::applyConfig(const EmitterConfig &config, bool allowPrewarm)
 	if (shapeChanged)
 		spawnAccumulator_ = 0.0f;
 
-	const int maxAtoms = std::max(1, config_.emission.maxAtoms);
-	while (static_cast<int>(atoms_.size()) > maxAtoms)
-		retire(atoms_.size() - 1);
+	enforceAtomLimit();
 
 	if (allowPrewarm && config_.emission.prewarm && atoms_.empty())
 		prewarm(context_);
+}
+
+void AtomSystem::cacheModes()
+{
+	const std::string &direction = config_.emission.directionModeId;
+	directionMode_ = direction == "shape_normal" ? DirectionMode::ShapeNormal
+			 : direction == "outward"    ? DirectionMode::Outward
+			 : direction == "inward"     ? DirectionMode::Inward
+			 : direction == "random"     ? DirectionMode::Random
+			 : direction == "endpoint"   ? DirectionMode::Endpoint
+						     : DirectionMode::Angle;
+
+	const std::string &arrival = config_.physics.endpoint.arrivalId;
+	arrivalMode_ = arrival == "arrive" ? ArrivalMode::Arrive
+					   : (arrival == "orbit" ? ArrivalMode::Orbit : ArrivalMode::Attract);
+
+	emitsContinuously_ = config_.emission.modeId != "burst";
+	emitsBursts_ = config_.emission.modeId != "continuous";
+}
+
+void AtomSystem::enforceAtomLimit()
+{
+	const size_t maxAtoms = static_cast<size_t>(std::max(1, config_.emission.maxAtoms));
+	while (atoms_.size() > maxAtoms)
+		retire(atoms_.size() - 1);
+}
+
+void AtomSystem::valuesChanged()
+{
+	evaluator_.setRender(config_.render);
+	context_.width = width();
+	context_.height = height();
+	enforceAtomLimit();
 }
 
 void AtomSystem::rebuildModules()
@@ -210,9 +243,12 @@ void AtomSystem::spawnOne(const SimContext &context)
 	if (!shape_)
 		return;
 
-	const EmissionConfig &emission = config_.emission;
 	const PhysicsConfig &physics = config_.physics;
-	const OffsetConfig &offset = physics.offset;
+
+	// The kind of atom comes first: how much it varies from its neighbours is up to its layer.
+	const size_t layerIndex = config_.design.pickLayer(random_.next());
+	const AtomLayer &layer = config_.design.layers[layerIndex];
+	const OffsetConfig &offset = layer.offset;
 
 	const SpawnSample sample = shape_->sample(random_, context);
 
@@ -225,21 +261,34 @@ void AtomSystem::spawnOne(const SimContext &context)
 	// Direction.
 	float angle = physics.emitAngle;
 	const Vec2 fromCenter = (atom.pos - context.center());
-	if (emission.directionModeId == "shape_normal") {
+	switch (directionMode_) {
+	case DirectionMode::ShapeNormal: {
 		const Vec2 normal = sample.normal.lengthSquared() > 0.0f ? sample.normal : fromCenter.normalized();
 		angle = rad2deg(std::atan2(normal.y, normal.x));
-	} else if (emission.directionModeId == "outward") {
+		break;
+	}
+	case DirectionMode::Outward: {
 		const Vec2 direction = fromCenter.lengthSquared() > 0.0f ? fromCenter.normalized()
 									 : random_.onUnitCircle();
 		angle = rad2deg(std::atan2(direction.y, direction.x));
-	} else if (emission.directionModeId == "inward") {
+		break;
+	}
+	case DirectionMode::Inward: {
 		const Vec2 direction = (context.center() - atom.pos).normalized();
 		angle = rad2deg(std::atan2(direction.y, direction.x));
-	} else if (emission.directionModeId == "random") {
+		break;
+	}
+	case DirectionMode::Random:
 		angle = random_.next() * 360.0f;
-	} else if (emission.directionModeId == "endpoint" && hasEndpointTarget_) {
-		const Vec2 direction = (endpointTarget_ - atom.pos).normalized();
-		angle = rad2deg(std::atan2(direction.y, direction.x));
+		break;
+	case DirectionMode::Endpoint:
+		if (hasEndpointTarget_) {
+			const Vec2 direction = (endpointTarget_ - atom.pos).normalized();
+			angle = rad2deg(std::atan2(direction.y, direction.x));
+		}
+		break;
+	case DirectionMode::Angle:
+		break;
 	}
 
 	angle += random_.nextSigned() * physics.emitSpread * 0.5f;
@@ -262,9 +311,7 @@ void AtomSystem::spawnOne(const SimContext &context)
 	atom.randomC = random_.next();
 
 	// Layer and size.
-	const size_t layerIndex = config_.design.pickLayer(random_.next());
 	atom.layer = static_cast<uint16_t>(layerIndex);
-	const AtomLayer &layer = config_.design.layers[layerIndex];
 	atom.size = std::max(0.1f, layer.size.base * (1.0f + random_.nextSigned() * offset.size));
 
 	// Rotation.
@@ -306,20 +353,17 @@ void AtomSystem::applyForces(Atom &atom, float dt, const SimContext &context)
 	const PhysicsConfig &physics = config_.physics;
 
 	if (physics.gravity != 0.0f)
-		atom.vel += angleToVector(physics.gravityAngle) * (physics.gravity * dt);
+		atom.vel += step_.gravity;
 
 	if (physics.turbulence > 0.0f) {
-		const float scale = std::max(1.0f, physics.turbulenceScale);
+		const float scale = step_.turbulenceScale;
 		const Vec2 flow = noise::flow(atom.pos.x / scale, atom.pos.y / scale,
 					      context.time * physics.turbulenceSpeed + atom.randomA);
 		atom.vel += flow * (physics.turbulence * dt);
 	}
 
-	if (physics.drag > 0.0f) {
-		// Exponential damping keeps the result frame-rate independent.
-		const float damping = std::exp(-physics.drag * dt);
-		atom.vel *= damping;
-	}
+	if (physics.drag > 0.0f)
+		atom.vel *= step_.damping;
 
 	for (const std::unique_ptr<Behavior> &behavior : behaviors_)
 		behavior->apply(atom, dt, context);
@@ -335,12 +379,12 @@ void AtomSystem::applyEndpoint(Atom &atom, float dt)
 	const Vec2 delta = target - atom.pos;
 	const float distance = delta.length();
 
-	if (endpoint.arrivalId == "arrive") {
+	if (arrivalMode_ == ArrivalMode::Arrive) {
 		// Blend towards the target so the atom lands exactly as its life runs out.
 		const float remaining = std::max(1e-3f, atom.life - atom.age);
 		const float blend = saturate(dt / remaining * std::max(0.0f, endpoint.strength));
 		atom.pos = lerp(atom.pos, target, blend);
-	} else if (endpoint.arrivalId == "orbit") {
+	} else if (arrivalMode_ == ArrivalMode::Orbit) {
 		if (distance > 1e-3f) {
 			const Vec2 radial = delta * (1.0f / distance);
 			const Vec2 tangent{-radial.y, radial.x};
@@ -392,14 +436,21 @@ void AtomSystem::update(float dt, SimContext context)
 	context.width = width();
 	context.height = height();
 	context.time = time_;
-	context_ = context;
+	context_ = std::move(context);
+
+	// The same for every atom this step, so worked out once rather than once per atom.
+	const PhysicsConfig &physics = config_.physics;
+	step_.gravity = angleToVector(physics.gravityAngle) * (physics.gravity * dt);
+	// Exponential damping keeps the result frame-rate independent.
+	step_.damping = std::exp(-physics.drag * dt);
+	step_.turbulenceScale = std::max(1.0f, physics.turbulenceScale);
 
 	hasEndpointTarget_ = endpoint_ && endpoint_->resolve(context_, config_.physics.endpoint, endpointTarget_);
 
 	// Emission.
 	if (emitting_) {
 		const EmissionConfig &emission = config_.emission;
-		if (emission.modeId != "burst") {
+		if (emitsContinuously_) {
 			spawnAccumulator_ += emission.rate * dt;
 			const size_t due = static_cast<size_t>(spawnAccumulator_);
 			if (due > 0) {
@@ -407,7 +458,7 @@ void AtomSystem::update(float dt, SimContext context)
 				spawn(due, context_);
 			}
 		}
-		if (emission.modeId != "continuous") {
+		if (emitsBursts_) {
 			burstTimer_ -= dt;
 			if (burstTimer_ <= 0.0f) {
 				burstTimer_ += std::max(0.05f, emission.burstInterval);
@@ -425,7 +476,7 @@ void AtomSystem::update(float dt, SimContext context)
 
 		atom.pos += atom.vel * dt;
 		atom.rotation += atom.rotationVelocity * dt;
-		if (config_.physics.alignToVelocity && atom.vel.lengthSquared() > 1e-4f)
+		if (physics.alignToVelocity && atom.vel.lengthSquared() > 1e-4f)
 			atom.rotation = rad2deg(std::atan2(atom.vel.y, atom.vel.x));
 
 		atom.age += dt;

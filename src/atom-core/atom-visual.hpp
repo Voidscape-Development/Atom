@@ -65,8 +65,12 @@ public:
 	void rebuild(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render);
 
 	/// Updates the values the evaluator reads without recreating any module. Used when only
-	/// numbers changed, which is what modulation does every frame.
+	/// numbers changed, e.g. while a slider is being dragged in the designer.
 	void refreshValues(const AtomDesign &design, const PhysicsConfig &physics, const RenderConfig &render);
+
+	/// Updates only the emitter-wide render trims. This is all modulation can change about how an
+	/// atom is drawn, so the per-frame path copies nothing else.
+	void setRender(const RenderConfig &render);
 
 	AtomVisual evaluate(const Atom &atom) const;
 
@@ -77,18 +81,30 @@ public:
 	const TrailStyle *trailStyleFor(const Atom &atom) const;
 
 private:
+	enum class ColorMode : uint8_t { Gradient, Solid, RandomStop };
+	enum class SheetMode : uint8_t { OverLife, Loop, Random };
+
+	/// Per-layer state resolved once per configuration, so evaluate() - which runs for every atom
+	/// every frame - never compares id strings.
 	struct LayerModules {
 		std::unique_ptr<FadePath> fade;
 		std::unique_ptr<TrailStyle> trail;
+		ColorMode colorMode = ColorMode::Gradient;
+		SheetMode sheetMode = SheetMode::OverLife;
+		bool additive = true;
+		bool customFade = false;
 	};
 
-	Color evaluateColor(const AtomLayer &layer, const Atom &atom, float t) const;
+	void cacheValues(const PhysicsConfig &physics);
+	Color evaluateColor(const AtomLayer &layer, const LayerModules &modules, const Atom &atom, float t) const;
 
 	AtomDesign design_;
-	PhysicsConfig physics_;
 	RenderConfig render_;
 	std::vector<LayerModules> modules_;
 	std::unique_ptr<LifetimeFalloff> falloff_;
+	Curve falloffCurve_;
+	bool customFalloff_ = false;
+	bool perAtomBloom_ = true;
 };
 
 /// Rotates a colour's hue by `turns` (1.0 is a full rotation). Alpha is untouched.

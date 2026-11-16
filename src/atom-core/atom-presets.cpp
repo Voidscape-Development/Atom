@@ -39,6 +39,14 @@ Color rgba(int r, int g, int b, int a = 255)
 	return Color(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
 }
 
+/// Gives every kind of atom in a preset the same variation. Presets that want their layers to
+/// differ can set `layer.offset` on each one instead.
+void setOffsets(EmitterConfig &config, const OffsetConfig &offset)
+{
+	for (AtomLayer &layer : config.design.layers)
+		layer.offset = offset;
+}
+
 AtomPreset embers()
 {
 	AtomPreset preset;
@@ -63,9 +71,10 @@ AtomPreset embers()
 	config.physics.turbulence = 55.0f;
 	config.physics.turbulenceScale = 160.0f;
 	config.physics.lifetime = 2.6f;
-	config.physics.offset.size = 0.5f;
-	config.physics.offset.lifetime = 0.35f;
-	config.physics.offset.brightness = 0.25f;
+	OffsetConfig offset;
+	offset.size = 0.5f;
+	offset.lifetime = 0.35f;
+	offset.brightness = 0.25f;
 
 	AtomLayer ember = makeLayer(
 		"Ember", "soft_circle",
@@ -80,6 +89,7 @@ AtomPreset embers()
 	config.design.layers.push_back(ember);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -106,8 +116,9 @@ AtomPreset fire()
 	config.physics.turbulenceScale = 110.0f;
 	config.physics.turbulenceSpeed = 1.1f;
 	config.physics.lifetime = 1.3f;
-	config.physics.offset.size = 0.45f;
-	config.physics.offset.position = 6.0f;
+	OffsetConfig offset;
+	offset.size = 0.45f;
+	offset.position = 6.0f;
 
 	AtomLayer flame = makeLayer("Flame", "smoke",
 				    Gradient{{{0.0f, rgba(255, 255, 220)},
@@ -134,6 +145,7 @@ AtomPreset fire()
 	config.design.layers.push_back(spark);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -160,8 +172,9 @@ AtomPreset sparks()
 	config.physics.drag = 1.1f;
 	config.physics.lifetime = 1.1f;
 	config.physics.alignToVelocity = true;
-	config.physics.offset.speed = 0.55f;
-	config.physics.offset.lifetime = 0.4f;
+	OffsetConfig offset;
+	offset.speed = 0.55f;
+	offset.lifetime = 0.4f;
 
 	AtomLayer spark = makeLayer(
 		"Spark", "soft_circle",
@@ -180,6 +193,7 @@ AtomPreset sparks()
 	config.design.layers.push_back(spark);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -204,8 +218,9 @@ AtomPreset flare()
 	config.physics.emitSpread = 12.0f;
 	config.physics.drag = 1.6f;
 	config.physics.lifetime = 2.2f;
-	config.physics.offset.speed = 0.3f;
-	config.physics.offset.hue = 0.25f;
+	OffsetConfig offset;
+	offset.speed = 0.3f;
+	offset.hue = 0.25f;
 
 	AtomLayer shell = makeLayer(
 		"Shell", "soft_circle",
@@ -222,6 +237,7 @@ AtomPreset flare()
 	config.design.layers.push_back(shell);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -247,8 +263,9 @@ AtomPreset smoke()
 	config.physics.turbulenceScale = 240.0f;
 	config.physics.lifetime = 4.5f;
 	config.physics.spin = 12.0f;
-	config.physics.offset.rotation = 1.0f;
-	config.physics.offset.size = 0.5f;
+	OffsetConfig offset;
+	offset.rotation = 1.0f;
+	offset.size = 0.5f;
 
 	AtomLayer puff = makeLayer("Puff", "smoke",
 				   Gradient{{{0.0f, rgba(190, 190, 200, 0)},
@@ -263,6 +280,7 @@ AtomPreset smoke()
 	config.design.layers.push_back(puff);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -287,8 +305,9 @@ AtomPreset fog()
 	config.physics.turbulence = 12.0f;
 	config.physics.turbulenceScale = 400.0f;
 	config.physics.lifetime = 12.0f;
-	config.physics.offset.size = 0.4f;
-	config.physics.offset.spawnPhase = 1.0f;
+	OffsetConfig offset;
+	offset.size = 0.4f;
+	offset.spawnPhase = 1.0f;
 
 	AtomLayer bank = makeLayer("Bank", "smoke",
 				   Gradient{{{0.0f, rgba(200, 205, 220, 0)},
@@ -303,6 +322,7 @@ AtomPreset fog()
 	config.design.layers.push_back(bank);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -325,9 +345,10 @@ AtomPreset magicDust()
 	config.physics.drag = 1.2f;
 	config.physics.turbulence = 40.0f;
 	config.physics.lifetime = 3.0f;
-	config.physics.offset.hue = 0.35f;
-	config.physics.offset.size = 0.6f;
-	config.physics.offset.spawnPhase = 1.0f;
+	OffsetConfig offset;
+	offset.hue = 0.35f;
+	offset.size = 0.6f;
+	offset.spawnPhase = 1.0f;
 
 	AtomLayer dust = makeLayer("Dust", "star",
 				   Gradient{{{0.0f, rgba(255, 255, 255, 0)},
@@ -345,6 +366,7 @@ AtomPreset magicDust()
 	config.design.layers.push_back(dust);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -372,7 +394,8 @@ AtomPreset runeCircle()
 	config.physics.endpoint.arrivalId = "orbit";
 	config.physics.endpoint.strength = 0.35f;
 	config.physics.endpoint.killOnArrival = false;
-	config.physics.offset.spawnPhase = 1.0f;
+	OffsetConfig offset;
+	offset.spawnPhase = 1.0f;
 
 	AtomLayer rune = makeLayer(
 		"Rune", "ring",
@@ -383,6 +406,7 @@ AtomPreset runeCircle()
 	config.design.layers.push_back(rune);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -410,8 +434,9 @@ AtomPreset confetti()
 	config.physics.turbulence = 60.0f;
 	config.physics.lifetime = 4.0f;
 	config.physics.spin = 220.0f;
-	config.physics.offset.rotation = 1.0f;
-	config.physics.offset.spawnPhase = 0.5f;
+	OffsetConfig offset;
+	offset.rotation = 1.0f;
+	offset.spawnPhase = 0.5f;
 
 	AtomLayer paper = makeLayer("Paper", "square",
 				    Gradient{{{0.0f, rgba(255, 80, 120)},
@@ -427,6 +452,7 @@ AtomPreset confetti()
 	config.design.layers.push_back(paper);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -450,8 +476,9 @@ AtomPreset bubbles()
 	config.physics.drag = 0.9f;
 	config.physics.turbulence = 25.0f;
 	config.physics.lifetime = 6.0f;
-	config.physics.offset.size = 0.6f;
-	config.physics.offset.spawnPhase = 1.0f;
+	OffsetConfig offset;
+	offset.size = 0.6f;
+	offset.spawnPhase = 1.0f;
 
 	AtomLayer bubble = makeLayer("Bubble", "ring",
 				     Gradient{{{0.0f, rgba(180, 230, 255, 0)},
@@ -466,6 +493,7 @@ AtomPreset bubbles()
 	config.design.layers.push_back(bubble);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -492,8 +520,9 @@ AtomPreset snow()
 	config.physics.turbulenceScale = 260.0f;
 	config.physics.turbulenceSpeed = 0.35f;
 	config.physics.lifetime = 9.0f;
-	config.physics.offset.size = 0.55f;
-	config.physics.offset.spawnPhase = 1.0f;
+	OffsetConfig offset;
+	offset.size = 0.55f;
+	offset.spawnPhase = 1.0f;
 
 	AtomLayer flake = makeLayer("Flake", "soft_circle",
 				    Gradient{{{0.0f, rgba(255, 255, 255, 0)},
@@ -506,6 +535,7 @@ AtomPreset snow()
 	config.design.layers.push_back(flake);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -531,7 +561,8 @@ AtomPreset rain()
 	config.physics.drag = 0.0f;
 	config.physics.lifetime = 1.6f;
 	config.physics.alignToVelocity = true;
-	config.physics.offset.speed = 0.2f;
+	OffsetConfig offset;
+	offset.speed = 0.2f;
 
 	AtomLayer drop = makeLayer("Drop", "soft_circle",
 				   Gradient{{{0.0f, rgba(190, 215, 255, 200)}, {1.0f, rgba(150, 190, 255, 90)}}}, 3.0f);
@@ -546,6 +577,7 @@ AtomPreset rain()
 	config.design.layers.push_back(drop);
 
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 
@@ -570,7 +602,8 @@ AtomPreset beatSparks()
 	config.physics.drag = 1.0f;
 	config.physics.lifetime = 1.4f;
 	config.physics.alignToVelocity = true;
-	config.physics.offset.speed = 0.5f;
+	OffsetConfig offset;
+	offset.speed = 0.5f;
 
 	AtomLayer spark = makeLayer(
 		"Spark", "soft_circle",
@@ -607,6 +640,7 @@ AtomPreset beatSparks()
 
 	config.render.bloomModeId = "both";
 	config.design.name = preset.name;
+	setOffsets(config, offset);
 	return preset;
 }
 

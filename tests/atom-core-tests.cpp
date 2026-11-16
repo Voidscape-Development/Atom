@@ -28,6 +28,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "atom-core/atom-fields.hpp"
 #include "atom-core/atom-modulation.hpp"
 
+// These tests are assert-based, so keep assert() alive in release configurations too. Without
+// this an optimized build would compile every check away and "pass" without testing anything.
+#undef NDEBUG
 #include <cassert>
 #include <cstdio>
 
@@ -65,26 +68,77 @@ static void runPreset(const AtomPreset &preset)
 	assert(static_cast<int>(peak) <= config.emission.maxAtoms);
 }
 
+/// Variation belongs to each kind of atom, so two layers in one emitter can differ in how much
+/// their atoms scatter.
+static void testPerLayerVariation()
+{
+	AtomLayer uniform;
+	uniform.id = "uniform";
+	uniform.size.base = 10.0f;
+	uniform.offset = OffsetConfig{};
+	uniform.offset.speed = 0.0f;
+	uniform.offset.size = 0.0f;
+	uniform.offset.lifetime = 0.0f;
+	uniform.offset.rotation = 0.0f;
+
+	AtomLayer varied = uniform;
+	varied.id = "varied";
+	varied.offset.size = 0.8f;
+	varied.offset.hue = 0.5f;
+
+	// The setting travels with the layer through the field table, which is what saves it.
+	const ParamBag bag = toBag(varied, layerFields());
+	assert(bag.getFloat("offset_size") == 0.8f);
+	AtomLayer restored;
+	fromBag(restored, bag, layerFields());
+	assert(restored.offset.size == 0.8f && restored.offset.hue == 0.5f);
+	assert(!toBag(PhysicsConfig{}, physicsFields()).has("offset_size"));
+
+	EmitterConfig config;
+	config.emission.prewarm = false;
+	config.emission.rate = 600.0f;
+	config.design.layers = {uniform, varied};
+
+	AtomSystem system;
+	system.configure(config);
+	for (int i = 0; i < 30; ++i)
+		system.update(1.0f / 60.0f, SimContext{});
+
+	size_t counts[2] = {0, 0};
+	float low[2] = {1e9f, 1e9f};
+	float high[2] = {0.0f, 0.0f};
+	bool hueShifted[2] = {false, false};
+	for (const Atom &atom : system.atoms()) {
+		assert(atom.layer < 2);
+		++counts[atom.layer];
+		low[atom.layer] = std::min(low[atom.layer], atom.size);
+		high[atom.layer] = std::max(high[atom.layer], atom.size);
+		hueShifted[atom.layer] = hueShifted[atom.layer] || atom.hueShift != 0.0f;
+	}
+	assert(counts[0] > 20 && counts[1] > 20);
+	assert(low[0] == 10.0f && high[0] == 10.0f && !hueShifted[0]);
+	assert(high[1] - low[1] > 4.0f && hueShifted[1]);
+
+	printf("per-layer variation ok\n");
+}
+
 static void testFieldRoundTrip()
 {
 	PhysicsConfig physics;
 	physics.gravity = -321.0f;
 	physics.endpoint.modeId = "point";
 	physics.endpoint.point = Vec2{0.25f, 0.75f};
-	physics.offset.hue = 0.5f;
 
 	const ParamBag bag = toBag(physics, physicsFields());
 	assert(bag.getFloat("gravity") == -321.0f);
 	assert(bag.getString("endpoint_mode") == "point");
 	assert(bag.getVec2("endpoint_point").y == 0.75f);
-	assert(bag.getFloat("offset_hue") == 0.5f);
 
 	PhysicsConfig restored;
 	fromBag(restored, bag, physicsFields());
 	assert(restored.gravity == physics.gravity);
 	assert(restored.endpoint.modeId == "point");
 	assert(restored.endpoint.point.x == 0.25f);
-	assert(restored.offset.hue == 0.5f);
 
 	// Visibility rules are prefixed when a nested table is spliced in.
 	const ParamSchema schema = schemaOf(physicsFields());
@@ -188,6 +242,115 @@ static void testModulation()
 	printf("modulation ok (%zu targets)\n", modulationTargets().size());
 }
 
+/// The per-frame path writes into a live configuration instead of producing a copy. It has to give
+/// the same answer as the copying path, and must not drift from frame to frame.
+static void testModulationInPlace()
+{
+	EmitterConfig base;
+	base.emission.rate = 100.0f;
+	base.emission.maxAtoms = 500;
+	base.physics.gravity = 100.0f;
+
+	ModulationRoute rate;
+	rate.modulatorId = "audio";
+	rate.target = "emission.rate";
+	rate.modeId = "add";
+	rate.amount = 400.0f;
+	rate.smoothing = 0.0f;
+
+	// A second route on the same parameter stacks on the first, not on last frame's result.
+	ModulationRoute boost = rate;
+	boost.modulatorId = "constant";
+	boost.modeId = "multiply";
+	boost.amount = 2.0f;
+
+	// An integer parameter stays an integer.
+	ModulationRoute cap;
+	cap.modulatorId = "constant";
+	cap.target = "emission.max_atoms";
+	cap.modeId = "replace";
+	cap.amount = 50.0f;
+	cap.smoothing = 0.0f;
+
+	// Unknown targets are ignored rather than fatal.
+	ModulationRoute bogus = cap;
+	bogus.target = "physics.no_such_parameter";
+
+	base.modulation = {rate, boost, cap, bogus};
+
+	ModulationEngine engine;
+	engine.setRoutes(base.modulation);
+	ModulationEngine reference;
+	reference.setRoutes(base.modulation);
+
+	ModContext context;
+	context.dt = 1.0f / 60.0f;
+	context.audio.valid = true;
+
+	EmitterConfig live = base;
+	EmitterConfig copied;
+	for (int frame = 0; frame < 120; ++frame) {
+		context.audio.level = (frame % 3) * 0.25f;
+		assert(engine.applyInPlace(base, context, live));
+		assert(reference.apply(base, context, copied));
+
+		const float expected = (100.0f + 400.0f * context.audio.level) * 2.0f;
+		assert(std::abs(live.emission.rate - expected) < 0.01f);
+		assert(live.emission.rate == copied.emission.rate);
+		assert(live.emission.maxAtoms == 50 && copied.emission.maxAtoms == 50);
+		assert(live.physics.gravity == base.physics.gravity);
+	}
+	assert(base.emission.rate == 100.0f && base.emission.maxAtoms == 500);
+
+	// Through the system: values are picked up without a rebuild, and the atom limit is enforced
+	// the moment modulation lowers it.
+	base.emission.rate = 2000.0f;
+	base.emission.prewarm = false;
+	AtomSystem system;
+	system.configure(base);
+	for (int frame = 0; frame < 30; ++frame)
+		system.update(1.0f / 60.0f, SimContext{});
+	assert(system.count() > 50);
+
+	context.audio.level = 0.0f;
+	system.updateValues([&](EmitterConfig &config) { return engine.applyInPlace(base, context, config); });
+	assert(system.config().emission.maxAtoms == 50);
+	assert(system.count() <= 50);
+
+	// No routes means nothing to do, and the live configuration is left alone.
+	engine.setRoutes({});
+	EmitterConfig untouched = base;
+	untouched.emission.rate = 7.0f;
+	assert(!engine.applyInPlace(base, context, untouched));
+	assert(untouched.emission.rate == 7.0f);
+
+	printf("in-place modulation ok\n");
+}
+
+static void testRotatedObjects()
+{
+	// A wide box turned a quarter turn is a tall box.
+	SceneObject box;
+	box.center = Vec2{100.0f, 100.0f};
+	box.halfSize = Vec2{50.0f, 10.0f};
+	box.rotation = 90.0f;
+
+	Vec2 normal;
+	assert(box.contains(Vec2{100.0f, 140.0f}));
+	assert(!box.contains(Vec2{140.0f, 100.0f}));
+
+	// Outside to the right: 30 px from the turned box's long side, pushed further right.
+	const float distance = box.distance(Vec2{140.0f, 100.0f}, normal);
+	assert(std::abs(distance - 30.0f) < 1e-3f);
+	assert(normal.x > 0.99f && std::abs(normal.y) < 1e-3f);
+
+	// The older, slower transforms must agree with the combined one distance() uses.
+	const Vec2 local = box.toLocal(Vec2{140.0f, 100.0f});
+	assert(std::abs(local.x) < 1e-3f && std::abs(local.y + 40.0f) < 1e-3f);
+
+	printf("rotated objects ok\n");
+}
+
 static void testCollision()
 {
 	registerBuiltinModules();
@@ -255,8 +418,11 @@ int main()
 	registerBuiltinModules();
 	testRegistries();
 	testFieldRoundTrip();
+	testPerLayerVariation();
 	testSprites();
 	testModulation();
+	testModulationInPlace();
+	testRotatedObjects();
 	testCollision();
 	testSheets();
 
