@@ -55,7 +55,6 @@ EmitterConfig stressConfig()
 	config.physics.endpoint.modeId = "point";
 	config.physics.endpoint.arrivalId = "orbit";
 	config.physics.endpoint.killOnArrival = false;
-	config.physics.offset.hue = 0.2f;
 
 	for (const char *id : {"wind", "vortex", "bounds"}) {
 		BehaviorInstance instance;
@@ -73,6 +72,7 @@ EmitterConfig stressConfig()
 	for (AtomLayer &layer : config.design.layers) {
 		layer.trail.enabled = true;
 		layer.trail.segments = 8;
+		layer.offset.hue = 0.2f;
 	}
 	return config;
 }

@@ -93,6 +93,8 @@ struct EndpointConfig {
 };
 
 /// Per-atom variation applied at spawn. Zero everywhere means every atom emits identically.
+/// Each kind of atom has its own, so sparks can scatter wildly while the flames they come from
+/// stay uniform.
 struct OffsetConfig {
 	float position = 0.0f;
 	float angle = 0.0f;
@@ -136,7 +138,6 @@ struct PhysicsConfig {
 	bool alignToVelocity = false;
 
 	EndpointConfig endpoint;
-	OffsetConfig offset;
 
 	/// Additional registered behaviours, applied after the built-in forces.
 	std::vector<BehaviorInstance> extras;
@@ -235,6 +236,8 @@ struct AtomLayer {
 	TrailConfig trail;
 	FadeConfig fade;
 	SheetConfig sheet;
+	/// How much one atom of this kind differs from the next.
+	OffsetConfig offset;
 };
 
 /// The look of an emitter: everything edited in the Atom Designer window.

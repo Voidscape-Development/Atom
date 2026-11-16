@@ -32,8 +32,6 @@ show a gradient, a curve and a live preview at once, and one editor cannot disag
 * **Destination endpoint** — nothing, a fixed point, or another source in the scene. Atoms can be
   attracted, made to arrive exactly as their life runs out, or put into orbit; they can be removed
   on arrival, and each atom can aim at a slightly scattered target.
-* **Offset** — position, angle, speed, size, lifetime, rotation, hue, brightness, opacity and spawn
-  phase variance. Zero everywhere means every atom emits identically.
 * **Extra forces** — optional wind, vortex, wander, bounds (bounce / wrap / remove), plus collision
   and attraction against other sources in the scene, each with their own parameters.
 
@@ -53,6 +51,10 @@ property page on the right, and a live preview underneath.
   own image.
 * **Sprite sheets** — animate an atom from a grid of frames in an image, spread over its life,
   looping at a fixed rate, or one random frame per atom.
+* **Variation** — how much one atom differs from the next: position, angle, speed, size, lifetime,
+  rotation, hue, brightness, opacity and spawn phase. It is set per kind of atom, so sparks can
+  scatter while the flames they rise from stay even. Zero everywhere means every atom of that kind
+  emits identically.
 * **Layers** — a design can hold several kinds of atom, each with its own spawn weight, so one
   emitter can produce e.g. flames *and* sparks.
 
@@ -63,7 +65,7 @@ property page on the right, and a live preview underneath.
 * **Audio reactivity** — point Atom at any audio source; it meters overall level, peak and three
   bands, then any number of **modulation routes** drive parameters from it.
 * **Modulation** — routes can be driven by audio, an LFO or smooth noise, and can target *any*
-  numeric emission, physics or render parameter (40 of them today), adding to it, scaling it or
+  numeric emission, physics or render parameter (30 of them today), adding to it, scaling it or
   replacing it, with per-route smoothing.
 * **Tracked sources** — name other sources (or track the whole scene) and the collision and
   attraction forces act on their live on-screen rectangles.

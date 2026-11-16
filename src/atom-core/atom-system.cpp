@@ -244,7 +244,11 @@ void AtomSystem::spawnOne(const SimContext &context)
 		return;
 
 	const PhysicsConfig &physics = config_.physics;
-	const OffsetConfig &offset = physics.offset;
+
+	// The kind of atom comes first: how much it varies from its neighbours is up to its layer.
+	const size_t layerIndex = config_.design.pickLayer(random_.next());
+	const AtomLayer &layer = config_.design.layers[layerIndex];
+	const OffsetConfig &offset = layer.offset;
 
 	const SpawnSample sample = shape_->sample(random_, context);
 
@@ -307,9 +311,7 @@ void AtomSystem::spawnOne(const SimContext &context)
 	atom.randomC = random_.next();
 
 	// Layer and size.
-	const size_t layerIndex = config_.design.pickLayer(random_.next());
 	atom.layer = static_cast<uint16_t>(layerIndex);
-	const AtomLayer &layer = config_.design.layers[layerIndex];
 	atom.size = std::max(0.1f, layer.size.base * (1.0f + random_.nextSigned() * offset.size));
 
 	// Rotation.

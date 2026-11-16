@@ -225,7 +225,7 @@ AtomDesignerDialog::AtomDesignerDialog(obs_source_t *source, QWidget *parent) : 
 	addPage("motion", buildPhysicsSectionPage("motion", false));
 	addPage("life", buildPhysicsSectionPage("life", true));
 	addPage("endpoint", buildPhysicsSectionPage("endpoint", false));
-	addPage("offset", buildPhysicsSectionPage("offset", false));
+	addPage("offset", buildLayerSectionPage("offset", false, {}, {}));
 	addPage("forces", buildForcesPage());
 	addPage("render",
 		buildBagPage(
@@ -311,13 +311,13 @@ void AtomDesignerDialog::buildSidebar()
 	addItem(text("Atom.Designer.Page.Trail"), "trail", {});
 	addItem(text("Atom.Designer.Page.Fade"), "fade", {});
 	addItem(text("Atom.Designer.Page.Sheet"), "sheet", {});
+	addItem(text("Atom.Designer.Page.Offset"), "offset", {});
 
 	sidebar_->addItem(makeHeaderItem(text("Atom.Designer.Section.Physics")));
 	addItem(text("Atom.Designer.Page.Emission"), "emission", {});
 	addItem(text("Atom.Designer.Page.Motion"), "motion", {});
 	addItem(text("Atom.Designer.Page.Lifetime"), "life", {});
 	addItem(text("Atom.Designer.Page.Endpoint"), "endpoint", {});
-	addItem(text("Atom.Designer.Page.Offset"), "offset", {});
 	addItem(text("Atom.Designer.Page.Forces"), "forces", {});
 
 	sidebar_->addItem(makeHeaderItem(text("Atom.Designer.Section.Reactivity")));

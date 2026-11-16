@@ -68,26 +68,77 @@ static void runPreset(const AtomPreset &preset)
 	assert(static_cast<int>(peak) <= config.emission.maxAtoms);
 }
 
+/// Variation belongs to each kind of atom, so two layers in one emitter can differ in how much
+/// their atoms scatter.
+static void testPerLayerVariation()
+{
+	AtomLayer uniform;
+	uniform.id = "uniform";
+	uniform.size.base = 10.0f;
+	uniform.offset = OffsetConfig{};
+	uniform.offset.speed = 0.0f;
+	uniform.offset.size = 0.0f;
+	uniform.offset.lifetime = 0.0f;
+	uniform.offset.rotation = 0.0f;
+
+	AtomLayer varied = uniform;
+	varied.id = "varied";
+	varied.offset.size = 0.8f;
+	varied.offset.hue = 0.5f;
+
+	// The setting travels with the layer through the field table, which is what saves it.
+	const ParamBag bag = toBag(varied, layerFields());
+	assert(bag.getFloat("offset_size") == 0.8f);
+	AtomLayer restored;
+	fromBag(restored, bag, layerFields());
+	assert(restored.offset.size == 0.8f && restored.offset.hue == 0.5f);
+	assert(!toBag(PhysicsConfig{}, physicsFields()).has("offset_size"));
+
+	EmitterConfig config;
+	config.emission.prewarm = false;
+	config.emission.rate = 600.0f;
+	config.design.layers = {uniform, varied};
+
+	AtomSystem system;
+	system.configure(config);
+	for (int i = 0; i < 30; ++i)
+		system.update(1.0f / 60.0f, SimContext{});
+
+	size_t counts[2] = {0, 0};
+	float low[2] = {1e9f, 1e9f};
+	float high[2] = {0.0f, 0.0f};
+	bool hueShifted[2] = {false, false};
+	for (const Atom &atom : system.atoms()) {
+		assert(atom.layer < 2);
+		++counts[atom.layer];
+		low[atom.layer] = std::min(low[atom.layer], atom.size);
+		high[atom.layer] = std::max(high[atom.layer], atom.size);
+		hueShifted[atom.layer] = hueShifted[atom.layer] || atom.hueShift != 0.0f;
+	}
+	assert(counts[0] > 20 && counts[1] > 20);
+	assert(low[0] == 10.0f && high[0] == 10.0f && !hueShifted[0]);
+	assert(high[1] - low[1] > 4.0f && hueShifted[1]);
+
+	printf("per-layer variation ok\n");
+}
+
 static void testFieldRoundTrip()
 {
 	PhysicsConfig physics;
 	physics.gravity = -321.0f;
 	physics.endpoint.modeId = "point";
 	physics.endpoint.point = Vec2{0.25f, 0.75f};
-	physics.offset.hue = 0.5f;
 
 	const ParamBag bag = toBag(physics, physicsFields());
 	assert(bag.getFloat("gravity") == -321.0f);
 	assert(bag.getString("endpoint_mode") == "point");
 	assert(bag.getVec2("endpoint_point").y == 0.75f);
-	assert(bag.getFloat("offset_hue") == 0.5f);
 
 	PhysicsConfig restored;
 	fromBag(restored, bag, physicsFields());
 	assert(restored.gravity == physics.gravity);
 	assert(restored.endpoint.modeId == "point");
 	assert(restored.endpoint.point.x == 0.25f);
-	assert(restored.offset.hue == 0.5f);
 
 	// Visibility rules are prefixed when a nested table is spliced in.
 	const ParamSchema schema = schemaOf(physicsFields());
@@ -367,6 +418,7 @@ int main()
 	registerBuiltinModules();
 	testRegistries();
 	testFieldRoundTrip();
+	testPerLayerVariation();
 	testSprites();
 	testModulation();
 	testModulationInPlace();

@@ -366,8 +366,6 @@ const FieldTable<PhysicsConfig> &physicsFields()
 
 		appendNested<PhysicsConfig, EndpointConfig>(f, endpointFields(), &PhysicsConfig::endpoint, "endpoint_",
 							    "endpoint");
-		appendNested<PhysicsConfig, OffsetConfig>(f, offsetFields(), &PhysicsConfig::offset, "offset_",
-							  "offset");
 		return f;
 	}();
 	return fields;
@@ -397,6 +395,7 @@ const FieldTable<AtomLayer> &layerFields()
 		appendNested<AtomLayer, TrailConfig>(f, trailFields(), &AtomLayer::trail, "trail_", "trail");
 		appendNested<AtomLayer, FadeConfig>(f, fadeFields(), &AtomLayer::fade, "fade_", "fade");
 		appendNested<AtomLayer, SheetConfig>(f, sheetFields(), &AtomLayer::sheet, "sheet_", "sheet");
+		appendNested<AtomLayer, OffsetConfig>(f, offsetFields(), &AtomLayer::offset, "offset_", "offset");
 		return f;
 	}();
 	return fields;
