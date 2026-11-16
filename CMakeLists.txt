@@ -99,6 +99,8 @@ if(ENABLE_QT)
       src/ui/atom-designer-dialog.hpp
       src/ui/atom-param-editor.cpp
       src/ui/atom-param-editor.hpp
+      src/ui/atom-preset-panel.cpp
+      src/ui/atom-preset-panel.hpp
       src/ui/atom-preview.cpp
       src/ui/atom-preview.hpp
       src/ui/atom-value-editors.cpp

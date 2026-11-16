@@ -22,10 +22,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "atom-core/atom-system.hpp"
 
 #include <QImage>
+#include <QPointF>
 #include <QTimer>
 #include <QWidget>
 
 #include <memory>
+#include <vector>
+
+class QPainter;
 
 namespace atom {
 namespace ui {
@@ -34,7 +38,10 @@ namespace ui {
 ///
 /// It shares the simulation and DesignEvaluator with the OBS renderer, so what the designer shows
 /// is what the source draws. Used for the live preview and for preset thumbnails.
-QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor &background);
+///
+/// `highlightLayer` dims every other kind of atom, which is how the designer shows which one is
+/// being edited; -1 draws them all normally.
+QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor &background, int highlightLayer = -1);
 
 /// Runs a configuration for `warmup` seconds and returns a single frame.
 QImage renderPresetThumbnail(const EmitterConfig &config, const QSize &size, float warmup = 1.6f);
@@ -56,12 +63,40 @@ public:
 
 	void setBackground(const QColor &color);
 
+	/// What the preview draws on top of the atoms to show what a selection controls.
+	enum class Overlay {
+		None,
+		/// Where atoms are born: the emitter shape, as a scatter of sample points.
+		Shape,
+		/// Launch direction and spread. Dragging in the preview aims it.
+		Launch,
+		/// The destination point. Dragging in the preview moves it.
+		Target,
+	};
+	void setOverlay(Overlay overlay);
+	/// Dims every kind of atom except this one; -1 shows them all.
+	void setHighlightLayer(int layer);
+	/// Checkerboard instead of a flat backdrop, to judge transparency.
+	void setChecker(bool checker);
+	/// Emits `count` atoms at once, like the source's burst trigger.
+	void burst(int count);
+	/// Middle of the emitter shape in emitter pixels: where the launch arrow starts.
+	QPointF shapeCenter() const { return QPointF(shapeCenter_.x, shapeCenter_.y); }
+
+signals:
+	/// The pointer was pressed or dragged while an interactive overlay is showing. The position
+	/// is in emitter pixels.
+	void dragged(const QPointF &position);
+
+public:
 	QSize sizeHint() const override;
 
 protected:
 	void paintEvent(QPaintEvent *event) override;
 	void showEvent(QShowEvent *event) override;
 	void hideEvent(QHideEvent *event) override;
+	void mousePressEvent(QMouseEvent *event) override;
+	void mouseMoveEvent(QMouseEvent *event) override;
 
 private:
 	void tick();
@@ -75,6 +110,18 @@ private:
 	QTimer timer_;
 	QColor background_{18, 18, 22};
 	bool playing_ = true;
+
+	void paintOverlay(QPainter &painter);
+	void resampleShape();
+	/// Emitter pixels to widget pixels: `widget = emitter * scale + offset`.
+	void mapping(float &scale, QPointF &offset) const;
+
+	Overlay overlay_ = Overlay::None;
+	int highlightLayer_ = -1;
+	bool checker_ = false;
+	/// Points picked by the configured emitter shape, cached per configuration.
+	std::vector<Vec2> shapeSamples_;
+	Vec2 shapeCenter_;
 	qint64 lastTick_ = 0;
 };
 

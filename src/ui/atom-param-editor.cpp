@@ -32,6 +32,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
+#include <QToolButton>
 
 #include <obs-module.h>
 
@@ -65,7 +66,8 @@ public:
 		spin_->setRange(minimum_, maximum_);
 		spin_->setSingleStep(step_);
 		spin_->setDecimals(step_ < 0.01 ? 3 : (step_ < 1.0 ? 2 : 0));
-		spin_->setMinimumWidth(90);
+		spin_->setMinimumWidth(78);
+		slider_->setMinimumWidth(70);
 		if (!spec.suffix.empty())
 			spin_->setSuffix(QString(" ") + QString::fromUtf8(spec.suffix.c_str()));
 
@@ -207,11 +209,20 @@ ParamEditor::ParamEditor(QWidget *parent) : QWidget(parent)
 	form_ = new QFormLayout(this);
 	form_->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 	form_->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+	// A label too long to share a line with its control goes above it instead of squeezing the
+	// control down to nothing. The editor lives in narrow columns as well as wide pages.
+	form_->setRowWrapPolicy(QFormLayout::WrapLongRows);
 }
 
 void ParamEditor::setSourceNames(const QStringList &names)
 {
 	sourceNames_ = names;
+}
+
+void ParamEditor::setLinks(const QStringList &linkable, const QStringList &linked)
+{
+	linkable_ = linkable;
+	linked_ = linked;
 }
 
 void ParamEditor::setSchema(const ParamSchema &schema, const ParamBag &values)
@@ -229,6 +240,33 @@ void ParamEditor::setSchema(const ParamSchema &schema, const ParamBag &values)
 		QWidget *editor = createEditor(spec, value ? *value : spec.defaultValue);
 		if (!editor)
 			continue;
+
+		// Settings that can be driven get a button at the end of the row. It sits with the
+		// setting itself, so what reacts to sound is visible where the value is edited.
+		const QString rowId = QString::fromStdString(spec.id);
+		if (linkable_.contains(rowId)) {
+			const bool linked = linked_.contains(rowId);
+			QToolButton *link = new QToolButton(this);
+			link->setText(QString(QChar(0x223F)));
+			link->setCheckable(true);
+			link->setChecked(linked);
+			link->setAutoRaise(!linked);
+			link->setToolTip(text(linked ? "Atom.Designer.Link.Edit" : "Atom.Designer.Link.Add"));
+			link->setAccessibleName(link->toolTip());
+			connect(link, &QToolButton::clicked, this, [this, link, linked, rowId] {
+				// The button shows state, it does not hold it: undo the toggle Qt just did.
+				link->setChecked(linked);
+				emit linkRequested(rowId);
+			});
+
+			QWidget *row = new QWidget(this);
+			QHBoxLayout *rowLayout = new QHBoxLayout(row);
+			rowLayout->setContentsMargins(0, 0, 0, 0);
+			rowLayout->setSpacing(4);
+			rowLayout->addWidget(editor, 1);
+			rowLayout->addWidget(link, 0);
+			editor = row;
+		}
 
 		QLabel *label = new QLabel(text(spec.label), this);
 		if (!spec.description.empty())
@@ -347,7 +385,7 @@ QWidget *ParamEditor::createEditor(const ParamSpec &spec, const Value &value)
 			box->addItem(name, name);
 
 		const QString current = QString::fromStdString(detail::asString(value));
-		const int index = box->findText(current);
+		const int index = current.isEmpty() ? 0 : box->findText(current);
 		if (index >= 0)
 			box->setCurrentIndex(index);
 		else

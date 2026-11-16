@@ -37,8 +37,26 @@ show a gradient, a curve and a live preview at once, and one editor cannot disag
 
 ### Atom Design
 
-The designer is laid out like OBS' *Add Source* dialog: categories on the left, a preset grid or a
-property page on the right, and a live preview underneath.
+The designer has three columns, and each answers one question:
+
+* **Outline (left) — what is this effect made of?** Emitter, Atoms, Motion, Reacts to and Output.
+  It is the only place anything is selected. Each kind of atom opens to show everything that
+  belongs to it: shape and blending, size, glow, trail, color and fade over life, and variation.
+  Tick boxes switch a kind of atom, a force or a link off without deleting it.
+* **Preview (middle) — what does it look like?** The selection is drawn into it: the kind of atom
+  being edited stays bright while the others dim, the emitter shape is marked out, and the launch
+  direction and the destination can be aimed by dragging in the preview. Underneath, the **life
+  tracks** put the selected atom's color, size and opacity on one birth-to-death axis.
+* **Inspector (right) — what am I changing?** It always names the selection and says how far it
+  reaches: one kind of atom, or the whole emitter.
+
+*Presets and revert…* above the outline opens a pop-up with every preset, the effect as it is now
+and the effect as it was when the designer was opened. Clicking one only shows it in the preview;
+*Use this* applies it. Undo and redo cover everything, preset changes included.
+
+Every numeric emitter-wide setting has a small wave button at the end of its row. It opens the
+link that drives that setting from audio, an LFO or noise, creating one if there is none, and says
+in the setting's own units how far it will move.
 
 * **Color** — a single color, a lifetime gradient with as many stops as you like (drag to move,
   double-click to add or recolor, right-click to remove), or a random color picked per atom.
