@@ -75,8 +75,16 @@ public:
 	void setRoutes(const std::vector<ModulationRoute> &routes);
 
 	/// Writes `base` with every enabled route applied into `out`. Returns false when there is
-	/// nothing to do, leaving `out` untouched.
+	/// nothing to do, leaving `out` untouched. Copies the whole configuration, so prefer
+	/// applyInPlace() for anything that runs every frame.
 	bool apply(const EmitterConfig &base, const ModContext &context, EmitterConfig &out);
+
+	/// Applies every enabled route directly to `live`, which must already equal `base` in every
+	/// value no route drives - true of any configuration that started out as a copy of `base`
+	/// and has only been written to by this engine since. Driven values are reset from `base`
+	/// first, so routes never compound from one frame to the next. Nothing is allocated or
+	/// copied. Returns false when there is nothing to do.
+	bool applyInPlace(const EmitterConfig &base, const ModContext &context, EmitterConfig &live);
 
 	bool empty() const { return routes_.empty(); }
 
@@ -84,11 +92,24 @@ public:
 	const std::vector<float> &values() const { return values_; }
 
 private:
+	enum class Table : uint8_t { None, Emission, Physics, Render };
+
+	/// A route's target id resolved to a field-table entry, so the per-frame path does no string
+	/// work at all.
+	struct Target {
+		Table table = Table::None;
+		size_t field = 0;
+	};
+
 	struct RouteState {
 		std::unique_ptr<Modulator> modulator;
+		Target target;
 		float smoothed = 0.0f;
 		bool primed = false;
 	};
+
+	bool active() const;
+	static Target resolveTarget(const std::string &id);
 
 	std::vector<ModulationRoute> routes_;
 	std::vector<RouteState> states_;

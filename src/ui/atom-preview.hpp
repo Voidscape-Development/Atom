@@ -60,6 +60,8 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent *event) override;
+	void showEvent(QShowEvent *event) override;
+	void hideEvent(QHideEvent *event) override;
 
 private:
 	void tick();
@@ -69,7 +71,6 @@ private:
 	/// silence: the designer does not tap the audio graph.
 	ModulationEngine modulation_;
 	EmitterConfig base_;
-	EmitterConfig modulated_;
 	float time_ = 0.0f;
 	QTimer timer_;
 	QColor background_{18, 18, 22};

@@ -472,7 +472,8 @@ class BoundsBehavior : public Behavior {
 public:
 	void configure(const ParamBag &params) override
 	{
-		modeId_ = params.getString("mode", "bounce");
+		const std::string mode = params.getString("mode", "bounce");
+		mode_ = mode == "kill" ? Mode::Kill : (mode == "wrap" ? Mode::Wrap : Mode::Bounce);
 		bounce_ = params.getFloat("bounce", 0.5f);
 		margin_ = params.getFloat("margin", 0.0f);
 	}
@@ -485,13 +486,13 @@ public:
 		const float right = context.width + margin_;
 		const float bottom = context.height + margin_;
 
-		if (modeId_ == "kill") {
+		if (mode_ == Mode::Kill) {
 			if (atom.pos.x < left || atom.pos.x > right || atom.pos.y < top || atom.pos.y > bottom)
 				atom.expired = true;
 			return;
 		}
 
-		if (modeId_ == "wrap") {
+		if (mode_ == Mode::Wrap) {
 			const float w = right - left;
 			const float h = bottom - top;
 			if (atom.pos.x < left)
@@ -522,7 +523,9 @@ public:
 	}
 
 private:
-	std::string modeId_ = "bounce";
+	// Resolved in configure(): apply() runs for every atom every frame.
+	enum class Mode : uint8_t { Bounce, Kill, Wrap };
+	Mode mode_ = Mode::Bounce;
 	float bounce_ = 0.5f;
 	float margin_ = 0.0f;
 };
@@ -532,7 +535,11 @@ class SourceCollisionBehavior : public Behavior {
 public:
 	void configure(const ParamBag &params) override
 	{
-		modeId_ = params.getString("mode", "bounce");
+		const std::string mode = params.getString("mode", "bounce");
+		mode_ = mode == "kill"    ? Mode::Kill
+			: mode == "stick" ? Mode::Stick
+			: mode == "slide" ? Mode::Slide
+					  : Mode::Bounce;
 		bounce_ = params.getFloat("bounce", 0.45f);
 		friction_ = params.getFloat("friction", 0.25f);
 		margin_ = params.getFloat("margin", 0.0f);
@@ -550,7 +557,7 @@ public:
 			if (distance > 0.0f)
 				continue;
 
-			if (modeId_ == "kill") {
+			if (mode_ == Mode::Kill) {
 				atom.expired = true;
 				return;
 			}
@@ -558,7 +565,7 @@ public:
 			// Push back out along the surface normal, then resolve the velocity.
 			atom.pos += normal * (-distance + 0.01f);
 
-			if (modeId_ == "stick") {
+			if (mode_ == Mode::Stick) {
 				atom.vel = Vec2{0.0f, 0.0f};
 				continue;
 			}
@@ -570,7 +577,7 @@ public:
 			const Vec2 normalPart = normal * into;
 			const Vec2 tangentPart = atom.vel - normalPart;
 
-			if (modeId_ == "slide")
+			if (mode_ == Mode::Slide)
 				atom.vel = tangentPart * (1.0f - saturate(friction_));
 			else
 				atom.vel = tangentPart * (1.0f - saturate(friction_)) - normalPart * saturate(bounce_);
@@ -578,7 +585,8 @@ public:
 	}
 
 private:
-	std::string modeId_ = "bounce";
+	enum class Mode : uint8_t { Bounce, Kill, Stick, Slide };
+	Mode mode_ = Mode::Bounce;
 	float bounce_ = 0.45f;
 	float friction_ = 0.25f;
 	float margin_ = 0.0f;

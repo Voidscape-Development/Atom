@@ -39,6 +39,7 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QStackedWidget;
+class QTimer;
 
 namespace atom {
 namespace ui {
@@ -85,7 +86,7 @@ private:
 	void addPage(const std::string &id, QWidget *widget);
 
 	AtomLayer *currentLayer();
-	void refreshAllPages();
+	void refreshVisiblePage();
 	void refreshLayerList();
 	void refreshForcesList();
 	void refreshRoutesList();
@@ -119,11 +120,12 @@ private:
 	QCheckBox *liveApply_ = nullptr;
 	QPushButton *deletePreset_ = nullptr;
 
-	/// Repopulates one generated page from the working config.
-	std::vector<std::function<void()>> sectionRefreshers_;
-	std::function<void()> layerPageRefresh_;
-	std::function<void()> forcesPageRefresh_;
-	std::function<void()> modulationPageRefresh_;
+	/// Repopulates one page from the working config, keyed by its index in the stack.
+	std::map<int, std::function<void()>> pageRefreshers_;
+	/// Handed from a page builder to addPage(), which knows the page's index.
+	std::function<void()> builtRefresher_;
+	/// Folds a burst of live edits into one write to the source.
+	QTimer *applyTimer_ = nullptr;
 
 	std::map<std::string, int> pageIndex_;
 	/// Simulated preset thumbnails, kept for the lifetime of the window.

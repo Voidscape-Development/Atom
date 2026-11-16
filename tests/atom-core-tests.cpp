@@ -28,6 +28,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "atom-core/atom-fields.hpp"
 #include "atom-core/atom-modulation.hpp"
 
+// These tests are assert-based, so keep assert() alive in release configurations too. Without
+// this an optimized build would compile every check away and "pass" without testing anything.
+#undef NDEBUG
 #include <cassert>
 #include <cstdio>
 
@@ -188,6 +191,115 @@ static void testModulation()
 	printf("modulation ok (%zu targets)\n", modulationTargets().size());
 }
 
+/// The per-frame path writes into a live configuration instead of producing a copy. It has to give
+/// the same answer as the copying path, and must not drift from frame to frame.
+static void testModulationInPlace()
+{
+	EmitterConfig base;
+	base.emission.rate = 100.0f;
+	base.emission.maxAtoms = 500;
+	base.physics.gravity = 100.0f;
+
+	ModulationRoute rate;
+	rate.modulatorId = "audio";
+	rate.target = "emission.rate";
+	rate.modeId = "add";
+	rate.amount = 400.0f;
+	rate.smoothing = 0.0f;
+
+	// A second route on the same parameter stacks on the first, not on last frame's result.
+	ModulationRoute boost = rate;
+	boost.modulatorId = "constant";
+	boost.modeId = "multiply";
+	boost.amount = 2.0f;
+
+	// An integer parameter stays an integer.
+	ModulationRoute cap;
+	cap.modulatorId = "constant";
+	cap.target = "emission.max_atoms";
+	cap.modeId = "replace";
+	cap.amount = 50.0f;
+	cap.smoothing = 0.0f;
+
+	// Unknown targets are ignored rather than fatal.
+	ModulationRoute bogus = cap;
+	bogus.target = "physics.no_such_parameter";
+
+	base.modulation = {rate, boost, cap, bogus};
+
+	ModulationEngine engine;
+	engine.setRoutes(base.modulation);
+	ModulationEngine reference;
+	reference.setRoutes(base.modulation);
+
+	ModContext context;
+	context.dt = 1.0f / 60.0f;
+	context.audio.valid = true;
+
+	EmitterConfig live = base;
+	EmitterConfig copied;
+	for (int frame = 0; frame < 120; ++frame) {
+		context.audio.level = (frame % 3) * 0.25f;
+		assert(engine.applyInPlace(base, context, live));
+		assert(reference.apply(base, context, copied));
+
+		const float expected = (100.0f + 400.0f * context.audio.level) * 2.0f;
+		assert(std::abs(live.emission.rate - expected) < 0.01f);
+		assert(live.emission.rate == copied.emission.rate);
+		assert(live.emission.maxAtoms == 50 && copied.emission.maxAtoms == 50);
+		assert(live.physics.gravity == base.physics.gravity);
+	}
+	assert(base.emission.rate == 100.0f && base.emission.maxAtoms == 500);
+
+	// Through the system: values are picked up without a rebuild, and the atom limit is enforced
+	// the moment modulation lowers it.
+	base.emission.rate = 2000.0f;
+	base.emission.prewarm = false;
+	AtomSystem system;
+	system.configure(base);
+	for (int frame = 0; frame < 30; ++frame)
+		system.update(1.0f / 60.0f, SimContext{});
+	assert(system.count() > 50);
+
+	context.audio.level = 0.0f;
+	system.updateValues([&](EmitterConfig &config) { return engine.applyInPlace(base, context, config); });
+	assert(system.config().emission.maxAtoms == 50);
+	assert(system.count() <= 50);
+
+	// No routes means nothing to do, and the live configuration is left alone.
+	engine.setRoutes({});
+	EmitterConfig untouched = base;
+	untouched.emission.rate = 7.0f;
+	assert(!engine.applyInPlace(base, context, untouched));
+	assert(untouched.emission.rate == 7.0f);
+
+	printf("in-place modulation ok\n");
+}
+
+static void testRotatedObjects()
+{
+	// A wide box turned a quarter turn is a tall box.
+	SceneObject box;
+	box.center = Vec2{100.0f, 100.0f};
+	box.halfSize = Vec2{50.0f, 10.0f};
+	box.rotation = 90.0f;
+
+	Vec2 normal;
+	assert(box.contains(Vec2{100.0f, 140.0f}));
+	assert(!box.contains(Vec2{140.0f, 100.0f}));
+
+	// Outside to the right: 30 px from the turned box's long side, pushed further right.
+	const float distance = box.distance(Vec2{140.0f, 100.0f}, normal);
+	assert(std::abs(distance - 30.0f) < 1e-3f);
+	assert(normal.x > 0.99f && std::abs(normal.y) < 1e-3f);
+
+	// The older, slower transforms must agree with the combined one distance() uses.
+	const Vec2 local = box.toLocal(Vec2{140.0f, 100.0f});
+	assert(std::abs(local.x) < 1e-3f && std::abs(local.y + 40.0f) < 1e-3f);
+
+	printf("rotated objects ok\n");
+}
+
 static void testCollision()
 {
 	registerBuiltinModules();
@@ -257,6 +369,8 @@ int main()
 	testFieldRoundTrip();
 	testSprites();
 	testModulation();
+	testModulationInPlace();
+	testRotatedObjects();
 	testCollision();
 	testSheets();
 

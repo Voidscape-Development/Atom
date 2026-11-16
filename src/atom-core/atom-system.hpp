@@ -43,9 +43,17 @@ public:
 	/// shape or the design's layer count changed in a way that invalidates them.
 	void configure(const EmitterConfig &config);
 
-	/// Applies a per-frame modulated configuration. Identical to configure() except that it
-	/// never prewarms, so a modulated emitter does not restart itself sixty times a second.
-	void setModulatedConfig(const EmitterConfig &config) { applyConfig(config, false); }
+	/// Lets `fn(EmitterConfig &)` adjust numeric emission, physics and render values of the live
+	/// configuration in place, then picks the new values up if it returns true.
+	///
+	/// This is the per-frame path used by modulation: nothing is copied, compared or rebuilt, so
+	/// `fn` must not change which modules are selected, their parameters or the design. Use
+	/// configure() for those.
+	template<typename Fn> void updateValues(Fn &&fn)
+	{
+		if (fn(config_))
+			valuesChanged();
+	}
 
 	const EmitterConfig &config() const { return config_; }
 
@@ -83,7 +91,20 @@ public:
 	float height() const { return static_cast<float>(config_.emission.height); }
 
 private:
+	enum class DirectionMode : uint8_t { Angle, ShapeNormal, Outward, Inward, Random, Endpoint };
+	enum class ArrivalMode : uint8_t { Attract, Arrive, Orbit };
+
+	/// Forces that are the same for every atom in a step, worked out once per update().
+	struct StepConstants {
+		Vec2 gravity;
+		float damping = 1.0f;
+		float turbulenceScale = 1.0f;
+	};
+
 	void applyConfig(const EmitterConfig &config, bool allowPrewarm);
+	void cacheModes();
+	void valuesChanged();
+	void enforceAtomLimit();
 	void rebuildModules();
 	void spawn(size_t count, const SimContext &context);
 	void spawnOne(const SimContext &context);
@@ -114,6 +135,13 @@ private:
 	bool configured_ = false;
 	bool hasEndpointTarget_ = false;
 	Vec2 endpointTarget_;
+
+	/// Id strings resolved once per configuration; the per-atom loops only ever see these.
+	DirectionMode directionMode_ = DirectionMode::Angle;
+	ArrivalMode arrivalMode_ = ArrivalMode::Attract;
+	bool emitsContinuously_ = true;
+	bool emitsBursts_ = false;
+	StepConstants step_;
 };
 
 } // namespace atom

@@ -42,6 +42,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <obs-module.h>
@@ -64,6 +65,9 @@ struct SourceHold {
 
 	explicit operator bool() const { return source != nullptr; }
 };
+
+/// How long live edits are gathered before being written to the source.
+constexpr int kLiveApplyIntervalMs = 40;
 
 QString text(const std::string &key)
 {
@@ -126,6 +130,14 @@ AtomDesignerDialog::AtomDesignerDialog(obs_source_t *source, QWidget *parent) : 
 	setWindowTitle(QString("%1 - %2").arg(text("Atom.Designer.Title"), QString::fromUtf8(name ? name : "")));
 	setWindowFlags(windowFlags() | Qt::Window);
 	resize(1060, 720);
+
+	// Writing to the source serializes the whole configuration and makes the source rebuild
+	// itself from it. Dragging a slider fires dozens of edits a second, so those are folded into
+	// one write per interval; the preview, which is cheap to update, still follows every edit.
+	applyTimer_ = new QTimer(this);
+	applyTimer_->setSingleShot(true);
+	applyTimer_->setInterval(kLiveApplyIntervalMs);
+	connect(applyTimer_, &QTimer::timeout, this, [this] { applyToSource(); });
 
 	// Left: categories and sections. Right: the active page. Bottom: live preview.
 	sidebar_ = new QListWidget(this);
@@ -254,6 +266,10 @@ AtomDesignerDialog::AtomDesignerDialog(obs_source_t *source, QWidget *parent) : 
 
 AtomDesignerDialog::~AtomDesignerDialog()
 {
+	// An edit made just before closing may still be waiting on the timer.
+	if (applyTimer_ && applyTimer_->isActive())
+		applyToSource();
+
 	if (weakSource_)
 		obs_weak_source_release(weakSource_);
 }
@@ -265,7 +281,12 @@ obs_source_t *AtomDesignerDialog::acquireSource() const
 
 void AtomDesignerDialog::addPage(const std::string &id, QWidget *widget)
 {
-	pageIndex_[id] = stack_->addWidget(widget);
+	const int index = stack_->addWidget(widget);
+	pageIndex_[id] = index;
+	// The page builder that just ran left its refresher behind; file it under the page it made.
+	if (builtRefresher_)
+		pageRefreshers_[index] = std::move(builtRefresher_);
+	builtRefresher_ = nullptr;
 }
 
 void AtomDesignerDialog::buildSidebar()
@@ -324,7 +345,7 @@ void AtomDesignerDialog::onSidebarChanged()
 	if (pageId == "presets")
 		refreshPresetGrid();
 	else
-		refreshAllPages();
+		refreshVisiblePage();
 }
 
 // -------------------------------------------------------------------------------------------
@@ -448,8 +469,7 @@ QWidget *AtomDesignerDialog::buildLayerPage()
 		if (!item || updating_)
 			return;
 		currentLayerId_ = item->data(Qt::UserRole).toString().toStdString();
-		refreshAllPages();
-		refresh();
+		refreshVisiblePage();
 	});
 
 	connect(add, &QPushButton::clicked, this, [this, refresh] {
@@ -491,7 +511,7 @@ QWidget *AtomDesignerDialog::buildLayerPage()
 	});
 
 	// The layer list drives the editors, so both refresh together whenever the page is shown.
-	layerPageRefresh_ = [this, refresh] {
+	builtRefresher_ = [this, refresh] {
 		refreshLayerList();
 		refresh();
 	};
@@ -575,7 +595,7 @@ QWidget *AtomDesignerDialog::buildLayerSectionPage(const std::string &group, boo
 			});
 	}
 
-	sectionRefreshers_.push_back(refresh);
+	builtRefresher_ = refresh;
 	return wrapInScrollArea(content);
 }
 
@@ -622,7 +642,7 @@ QWidget *AtomDesignerDialog::buildEmissionPage()
 		configChanged();
 	});
 
-	sectionRefreshers_.push_back(refresh);
+	builtRefresher_ = refresh;
 	return wrapInScrollArea(content);
 }
 
@@ -680,7 +700,7 @@ QWidget *AtomDesignerDialog::buildPhysicsSectionPage(const std::string &group, b
 		});
 	}
 
-	sectionRefreshers_.push_back(refresh);
+	builtRefresher_ = refresh;
 	return wrapInScrollArea(content);
 }
 
@@ -710,7 +730,7 @@ QWidget *AtomDesignerDialog::buildBagPage(const ParamSchema &schema, std::functi
 		configChanged();
 	});
 
-	sectionRefreshers_.push_back(refresh);
+	builtRefresher_ = refresh;
 	return wrapInScrollArea(content);
 }
 
@@ -827,7 +847,7 @@ QWidget *AtomDesignerDialog::buildModulationPage()
 		configChanged();
 	});
 
-	modulationPageRefresh_ = [this, refreshEditors] {
+	builtRefresher_ = [this, refreshEditors] {
 		refreshRoutesList();
 		refreshEditors();
 	};
@@ -921,7 +941,7 @@ QWidget *AtomDesignerDialog::buildForcesPage()
 		configChanged();
 	});
 
-	forcesPageRefresh_ = [this, refreshEditor] {
+	builtRefresher_ = [this, refreshEditor] {
 		refreshForcesList();
 		refreshEditor();
 	};
@@ -1064,16 +1084,13 @@ void AtomDesignerDialog::refreshPresetGrid()
 	}
 }
 
-void AtomDesignerDialog::refreshAllPages()
+void AtomDesignerDialog::refreshVisiblePage()
 {
-	for (const std::function<void()> &refresh : sectionRefreshers_)
-		refresh();
-	if (layerPageRefresh_)
-		layerPageRefresh_();
-	if (forcesPageRefresh_)
-		forcesPageRefresh_();
-	if (modulationPageRefresh_)
-		modulationPageRefresh_();
+	// Repopulating a page rebuilds its editor widgets, so only the page on screen is refreshed.
+	// The others catch up when they are switched to, which also goes through here.
+	const auto it = pageRefreshers_.find(stack_->currentIndex());
+	if (it != pageRefreshers_.end() && it->second)
+		it->second();
 }
 
 void AtomDesignerDialog::refreshPreview()
@@ -1090,17 +1107,19 @@ void AtomDesignerDialog::configChanged()
 {
 	config_.design.presetId.clear();
 	refreshPreview();
-
-	if (liveApply_ && liveApply_->isChecked())
-		applyToSource();
+	// Start only when idle: restarting on every edit would hold the write back for as long as
+	// a slider keeps moving.
+	if (liveApply_ && liveApply_->isChecked() && !applyTimer_->isActive())
+		applyTimer_->start();
 }
 
 void AtomDesignerDialog::applyToSource()
 {
+	applyTimer_->stop();
+
 	SourceHold hold(weakSource_);
 	if (!hold)
 		return;
-
 	applyConfigToSource(hold.source, config_);
 }
 
@@ -1119,7 +1138,7 @@ void AtomDesignerDialog::applyPreset(const AtomPreset &preset)
 		config_.design = AtomDesign::defaultDesign();
 	currentLayerId_ = config_.design.layers.front().id;
 
-	refreshAllPages();
+	refreshVisiblePage();
 	refreshPreview();
 	if (liveApply_ && liveApply_->isChecked())
 		applyToSource();
@@ -1177,6 +1196,9 @@ void AtomDesignerDialog::onPresetActivated(QListWidgetItem *item)
 
 void AtomDesignerDialog::reloadFromSource()
 {
+	// Reverting discards unapplied edits, including one still waiting to be written.
+	applyTimer_->stop();
+
 	SourceHold hold(weakSource_);
 	if (!hold)
 		return;
@@ -1186,7 +1208,7 @@ void AtomDesignerDialog::reloadFromSource()
 		config_.design = AtomDesign::defaultDesign();
 	currentLayerId_ = config_.design.layers.front().id;
 
-	refreshAllPages();
+	refreshVisiblePage();
 	refreshPreview();
 }
 

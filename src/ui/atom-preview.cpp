@@ -56,7 +56,8 @@ struct Canvas {
 	{
 		width = w;
 		height = h;
-		rgb.assign(static_cast<size_t>(w) * h * 3, 0.0f);
+		// resize() keeps the allocation from the previous frame; every texel is written below.
+		rgb.resize(static_cast<size_t>(w) * h * 3);
 		for (size_t i = 0; i < rgb.size(); i += 3) {
 			rgb[i + 0] = static_cast<float>(background.redF());
 			rgb[i + 1] = static_cast<float>(background.greenF());
@@ -139,8 +140,16 @@ ParamBag bloomParams(const BloomConfig &bloom)
 	return params;
 }
 
-void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const AtomLayer &layer, const AtomVisual &visual,
-	       float scale, const Vec2 &offset)
+/// The masks one layer draws with, looked up once per frame. Building a cache key means
+/// formatting strings, which is far too slow to do for every atom.
+struct LayerMasks {
+	const std::vector<uint8_t> *sprite = nullptr;
+	const std::vector<uint8_t> *glow = nullptr;
+	bool additive = true;
+};
+
+void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const AtomLayer &layer, const LayerMasks &masks,
+	       const AtomVisual &visual, float scale, const Vec2 &offset)
 {
 	const std::vector<TrailHistory> &trails = system.trails();
 	if (index >= trails.size())
@@ -152,9 +161,9 @@ void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const Ato
 
 	const Atom &atom = system.atoms()[index];
 	const TrailStyle *style = system.evaluator().trailStyleFor(atom);
-	const std::vector<uint8_t> &mask = maskFor(layer.spriteId, layer.spriteParams);
+	const std::vector<uint8_t> &mask = *masks.sprite;
 	const Color base = layer.trail.inheritColor ? visual.color : layer.trail.tint;
-	const bool additive = layer.blendId == "additive";
+	const bool additive = masks.additive;
 
 	const size_t samples = std::min<size_t>(history.count, static_cast<size_t>(std::max(2, layer.trail.segments)));
 	Vec2 previous = atom.pos;
@@ -192,7 +201,8 @@ void drawTrail(Canvas &canvas, const AtomSystem &system, size_t index, const Ato
 
 QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor &background)
 {
-	Canvas canvas;
+	// Only ever called from the UI thread, so one canvas can be reused for every frame.
+	static Canvas canvas;
 	canvas.reset(std::max(1, size.width()), std::max(1, size.height()), background);
 
 	// Fit the emitter surface into the widget, letterboxing to keep the aspect ratio honest.
@@ -205,27 +215,36 @@ QImage renderAtomFrame(const AtomSystem &system, const QSize &size, const QColor
 	const DesignEvaluator &evaluator = system.evaluator();
 	const std::vector<Atom> &atoms = system.atoms();
 
+	static std::vector<LayerMasks> layerMasks;
+	layerMasks.resize(design.layers.size());
+	for (size_t i = 0; i < design.layers.size(); ++i) {
+		const AtomLayer &layer = design.layers[i];
+		layerMasks[i].sprite = &maskFor(layer.spriteId, layer.spriteParams);
+		layerMasks[i].glow = &maskFor("soft_circle", bloomParams(layer.bloom));
+		layerMasks[i].additive = layer.blendId == "additive";
+	}
+
 	for (size_t i = 0; i < atoms.size(); ++i) {
 		const Atom &atom = atoms[i];
 		if (atom.layer >= design.layers.size())
 			continue;
 
 		const AtomLayer &layer = design.layers[atom.layer];
+		const LayerMasks &masks = layerMasks[atom.layer];
 		const AtomVisual visual = evaluator.evaluate(atom);
 		if (visual.color.a <= 0.002f && visual.bloomAlpha <= 0.002f)
 			continue;
 
 		if (layer.trail.enabled && system.trailsEnabled())
-			drawTrail(canvas, system, i, layer, visual, scale, offset);
+			drawTrail(canvas, system, i, layer, masks, visual, scale, offset);
 
 		if (visual.bloomAlpha > 0.002f) {
-			drawSprite(canvas, maskFor("soft_circle", bloomParams(layer.bloom)),
-				   visual.position * scale + offset, visual.bloomSize * scale, 0.0f, visual.bloomColor,
-				   true);
+			drawSprite(canvas, *masks.glow, visual.position * scale + offset, visual.bloomSize * scale,
+				   0.0f, visual.bloomColor, true);
 		}
 
-		drawSprite(canvas, maskFor(layer.spriteId, layer.spriteParams), visual.position * scale + offset,
-			   visual.size * scale, visual.rotation, visual.color, layer.blendId == "additive");
+		drawSprite(canvas, *masks.sprite, visual.position * scale + offset, visual.size * scale,
+			   visual.rotation, visual.color, masks.additive);
 	}
 
 	return canvas.toImage();
@@ -251,7 +270,7 @@ AtomPreview::AtomPreview(QWidget *parent) : QWidget(parent)
 	system_ = std::make_unique<AtomSystem>();
 
 	connect(&timer_, &QTimer::timeout, this, &AtomPreview::tick);
-	timer_.start(16);
+	timer_.setInterval(16);
 	lastTick_ = QDateTime::currentMSecsSinceEpoch();
 }
 
@@ -303,12 +322,25 @@ void AtomPreview::tick()
 	ModContext modContext;
 	modContext.time = time_;
 	modContext.dt = dt;
-	if (modulation_.apply(base_, modContext, modulated_))
-		system_->setModulatedConfig(modulated_);
+	system_->updateValues([&](EmitterConfig &live) { return modulation_.applyInPlace(base_, modContext, live); });
 
 	SimContext context;
 	system_->update(dt, context);
 	update();
+}
+
+void AtomPreview::showEvent(QShowEvent *event)
+{
+	QWidget::showEvent(event);
+	// The timer only runs while there is something on screen to animate.
+	lastTick_ = QDateTime::currentMSecsSinceEpoch();
+	timer_.start();
+}
+
+void AtomPreview::hideEvent(QHideEvent *event)
+{
+	timer_.stop();
+	QWidget::hideEvent(event);
 }
 
 void AtomPreview::paintEvent(QPaintEvent *)

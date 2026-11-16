@@ -21,9 +21,12 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "plugin-support.h"
 
 #include <graphics/vec2.h>
+#include <graphics/vec3.h>
 #include <graphics/vec4.h>
 
 #include <obs-module.h>
+
+#include <cstring>
 
 namespace atom {
 
@@ -56,60 +59,11 @@ gs_effect_t *atomEffect()
 	return g_effect;
 }
 
-/// Emits one rotated, colour-modulated quad as two triangles, over a sub-rectangle of the
-/// sprite texture (the whole texture unless a sprite sheet is in play).
-void emitQuad(const Vec2 &center, float size, float rotationDegrees, uint32_t color, float u0 = 0.0f, float v0 = 0.0f,
-	      float u1 = 1.0f, float v1 = 1.0f)
-{
-	const float half = size * 0.5f;
-	const float radians = deg2rad(rotationDegrees);
-	const float c = std::cos(radians);
-	const float s = std::sin(radians);
-
-	const Vec2 right{c * half, s * half};
-	const Vec2 down{-s * half, c * half};
-
-	const Vec2 corners[4] = {
-		center - right - down,
-		center + right - down,
-		center + right + down,
-		center - right + down,
-	};
-	const float uvs[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
-	const int order[6] = {0, 1, 2, 0, 2, 3};
-
-	for (int i = 0; i < 6; ++i) {
-		const int index = order[i];
-		gs_color(color);
-		gs_texcoord(uvs[index][0], uvs[index][1], 0);
-		gs_vertex2f(corners[index].x, corners[index].y);
-	}
-}
-
-/// Emits a quad stretched between two points, used for trail segments.
-void emitSegment(const Vec2 &from, const Vec2 &to, float width, uint32_t colorFrom, uint32_t colorTo)
-{
-	const Vec2 along = to - from;
-	if (along.lengthSquared() < 1e-6f)
-		return;
-
-	const Vec2 direction = along.normalized();
-	const Vec2 normal{-direction.y * width * 0.5f, direction.x * width * 0.5f};
-
-	const Vec2 corners[4] = {from - normal, to - normal, to + normal, from + normal};
-	const uint32_t colors[4] = {colorFrom, colorTo, colorTo, colorFrom};
-	// The sprite's horizontal centre line is stretched along the segment, so a soft round sprite
-	// becomes a soft streak.
-	const float uvs[4][2] = {{0.0f, 0.35f}, {1.0f, 0.35f}, {1.0f, 0.65f}, {0.0f, 0.65f}};
-	const int order[6] = {0, 1, 2, 0, 2, 3};
-
-	for (int i = 0; i < 6; ++i) {
-		const int index = order[i];
-		gs_color(colors[index]);
-		gs_texcoord(uvs[index][0], uvs[index][1], 0);
-		gs_vertex2f(corners[index].x, corners[index].y);
-	}
-}
+/// Smallest vertex buffer worth allocating; avoids regrowing through tiny sizes on start-up.
+constexpr size_t kMinVertexCapacity = 1536;
+/// Frames a buffer may sit at under a quarter full before it is traded for a smaller one. The
+/// whole buffer is uploaded every frame, so one big burst should not be paid for indefinitely.
+constexpr int kShrinkAfterFrames = 240;
 
 void setBlend(bool additive)
 {
@@ -119,19 +73,15 @@ void setBlend(bool additive)
 				   GS_BLEND_INVSRCALPHA);
 }
 
-void drawWithTexture(gs_effect_t *effect, gs_texture_t *texture, const std::function<void()> &emit)
+void drawRange(gs_effect_t *effect, gs_eparam_t *image, gs_texture_t *texture, size_t start, size_t count)
 {
-	if (!texture)
+	// A zero count means "the whole buffer" to gs_draw, so an empty range must not reach it.
+	if (!texture || count == 0)
 		return;
 
-	gs_eparam_t *param = gs_effect_get_param_by_name(effect, "image");
-	gs_effect_set_texture(param, texture);
-
-	while (gs_effect_loop(effect, "Draw")) {
-		gs_render_start(true);
-		emit();
-		gs_render_stop(GS_TRIS);
-	}
+	gs_effect_set_texture(image, texture);
+	while (gs_effect_loop(effect, "Draw"))
+		gs_draw(GS_TRIS, static_cast<uint32_t>(start), static_cast<uint32_t>(count));
 }
 
 /// Bloom uses its own soft sprite so a star or a square still glows like a light source.
@@ -155,134 +105,266 @@ void AtomRenderer::releaseGraphics()
 	SpriteCache::instance().clear();
 }
 
-void AtomRenderer::renderTrails(const AtomSystem &system, const AtomLayer &layer, const std::vector<size_t> &indices)
+/// Appends one rotated, colour-modulated quad as two triangles, over a sub-rectangle of the sprite
+/// texture (the whole texture unless a sprite sheet is in play).
+void AtomRenderer::stageQuad(const Vec2 &center, float size, float rotationDegrees, uint32_t color, float u0, float v0,
+			     float u1, float v1)
 {
-	gs_effect_t *effect = atomEffect();
-	if (!effect || !system.trailsEnabled())
+	const float half = size * 0.5f;
+	const float radians = deg2rad(rotationDegrees);
+	const float c = std::cos(radians);
+	const float s = std::sin(radians);
+	const Vec2 right{c * half, s * half};
+	const Vec2 down{-s * half, c * half};
+
+	const Vec2 corners[4] = {
+		center - right - down,
+		center + right - down,
+		center + right + down,
+		center - right + down,
+	};
+	const float uvs[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+	const uint32_t colors[4] = {color, color, color, color};
+	stageCorners(corners, uvs, colors);
+}
+
+/// Appends a quad stretched between two points, used for trail segments.
+void AtomRenderer::stageSegment(const Vec2 &from, const Vec2 &to, float width, uint32_t color)
+{
+	const Vec2 along = to - from;
+	if (along.lengthSquared() < 1e-6f)
+		return;
+
+	const Vec2 direction = along.normalized();
+	const Vec2 normal{-direction.y * width * 0.5f, direction.x * width * 0.5f};
+
+	const Vec2 corners[4] = {from - normal, to - normal, to + normal, from + normal};
+	// The sprite's horizontal centre line is stretched along the segment, so a soft round sprite
+	// becomes a soft streak.
+	const float uvs[4][2] = {{0.0f, 0.35f}, {1.0f, 0.35f}, {1.0f, 0.65f}, {0.0f, 0.65f}};
+	const uint32_t colors[4] = {color, color, color, color};
+	stageCorners(corners, uvs, colors);
+}
+
+void AtomRenderer::stageCorners(const Vec2 corners[4], const float uvs[4][2], const uint32_t colors[4])
+{
+	static const int order[6] = {0, 1, 2, 0, 2, 3};
+
+	const size_t base = points_.size();
+	points_.resize(base + 6);
+	texcoords_.resize(base + 6);
+	colors_.resize(base + 6);
+
+	for (int i = 0; i < 6; ++i) {
+		const int index = order[i];
+		vec3_set(&points_[base + i], corners[index].x, corners[index].y, 0.0f);
+		vec2_set(&texcoords_[base + i], uvs[index][0], uvs[index][1]);
+		colors_[base + i] = colors[index];
+	}
+}
+
+void AtomRenderer::stageTrails(const AtomSystem &system, const AtomLayer &layer, const std::vector<uint32_t> &indices)
+{
+	if (!system.trailsEnabled())
 		return;
 
 	const std::vector<Atom> &atoms = system.atoms();
 	const std::vector<TrailHistory> &trails = system.trails();
 	const DesignEvaluator &evaluator = system.evaluator();
+	const float fade = saturate(layer.trail.fade);
 
-	gs_texture_t *texture = SpriteCache::instance().texture(layer.spriteId, layer.spriteParams, layer.imagePath);
-	if (!texture)
-		return;
+	for (size_t n = 0; n < indices.size(); ++n) {
+		const size_t index = indices[n];
+		if (index >= trails.size())
+			continue;
+		const Atom &atom = atoms[index];
+		const TrailHistory &history = trails[index];
+		if (history.count < 2)
+			continue;
 
-	setBlend(layer.blendId == "additive");
+		const AtomVisual &visual = visuals_[n];
+		const TrailStyle *style = evaluator.trailStyleFor(atom);
+		const Color base = layer.trail.inheritColor ? visual.color : layer.trail.tint;
 
-	drawWithTexture(effect, texture, [&] {
-		for (const size_t index : indices) {
-			if (index >= trails.size())
-				continue;
+		const size_t samples =
+			std::min<size_t>(history.count, static_cast<size_t>(std::max(2, layer.trail.segments)));
+		Vec2 previous = atom.pos;
+		for (size_t i = 0; i < samples; ++i) {
+			const float t = static_cast<float>(i + 1) / static_cast<float>(samples);
+			TrailSample modulation;
+			if (style)
+				modulation = style->sample(t, atom);
 
-			const Atom &atom = atoms[index];
-			const TrailHistory &history = trails[index];
-			if (history.count < 2)
-				continue;
-
-			const AtomVisual visual = evaluator.evaluate(atom);
-			const TrailStyle *style = evaluator.trailStyleFor(atom);
-			const Color base = layer.trail.inheritColor ? visual.color : layer.trail.tint;
-			const float fade = saturate(layer.trail.fade);
-
-			const size_t samples =
-				std::min<size_t>(history.count, static_cast<size_t>(std::max(2, layer.trail.segments)));
-
-			Vec2 previous = atom.pos;
-			for (size_t i = 0; i < samples; ++i) {
-				const float t = static_cast<float>(i + 1) / static_cast<float>(samples);
-				TrailSample modulation;
-				if (style)
-					modulation = style->sample(t, atom);
-
-				Color color = base;
-				color.a *= modulation.alphaScale * lerp(1.0f, 1.0f - t, fade);
-				if (color.a <= 0.002f) {
-					previous = history.at(i) + modulation.offset;
-					continue;
-				}
-
-				const Vec2 point = history.at(i) + modulation.offset;
-				const float width =
-					std::max(0.5f, visual.size * layer.trail.width * modulation.widthScale);
-
-				if (style && style->discrete())
-					emitQuad(point, width, atom.rotation, color.toRGBA());
-				else
-					emitSegment(previous, point, width, color.toRGBA(), color.toRGBA());
-
+			const Vec2 point = history.at(i) + modulation.offset;
+			Color color = base;
+			color.a *= modulation.alphaScale * lerp(1.0f, 1.0f - t, fade);
+			if (color.a <= 0.002f) {
 				previous = point;
+				continue;
 			}
+
+			const float width = std::max(0.5f, visual.size * layer.trail.width * modulation.widthScale);
+
+			if (style && style->discrete())
+				stageQuad(point, width, atom.rotation, color.toRGBA());
+			else
+				stageSegment(previous, point, width, color.toRGBA());
+			previous = point;
 		}
-	});
+	}
 }
 
-void AtomRenderer::renderLayer(const AtomSystem &system, size_t layerIndex, const std::vector<size_t> &indices)
+void AtomRenderer::stageLayer(const AtomSystem &system, size_t layerIndex, const std::vector<uint32_t> &indices,
+			      LayerDraw &draw)
 {
+	draw = LayerDraw{};
 	if (indices.empty())
 		return;
 
+	const AtomLayer &layer = system.config().design.layers[layerIndex];
+	const std::vector<Atom> &atoms = system.atoms();
+	const DesignEvaluator &evaluator = system.evaluator();
+
+	// Trails, glow and core each need the atom's drawable values. Work them out once and let
+	// all three passes read them, rather than evaluating the design three times per atom.
+	visuals_.resize(indices.size());
+	for (size_t n = 0; n < indices.size(); ++n)
+		visuals_[n] = evaluator.evaluate(atoms[indices[n]]);
+
+	draw.trailStart = points_.size();
+	if (layer.trail.enabled)
+		stageTrails(system, layer, indices);
+	draw.trailCount = points_.size() - draw.trailStart;
+
+	// Glow goes down before the core, so the atom itself stays crisp on top of it.
+	draw.glowStart = points_.size();
+	if (layer.bloom.amount > 1e-3f) {
+		for (const AtomVisual &visual : visuals_) {
+			if (visual.bloomAlpha <= 0.002f || visual.bloomSize <= 0.0f)
+				continue;
+			stageQuad(visual.position, visual.bloomSize, 0.0f, visual.bloomColor.toRGBA());
+		}
+	}
+	draw.glowCount = points_.size() - draw.glowStart;
+
+	draw.coreStart = points_.size();
+	for (const AtomVisual &visual : visuals_) {
+		if (visual.color.a <= 0.002f || visual.size <= 0.0f)
+			continue;
+		stageQuad(visual.position, visual.size, visual.rotation, visual.color.toRGBA(), visual.u0, visual.v0,
+			  visual.u1, visual.v1);
+	}
+	draw.coreCount = points_.size() - draw.coreStart;
+}
+
+bool AtomRenderer::uploadVertices()
+{
+	const size_t count = points_.size();
+	if (count == 0)
+		return false;
+
+	// Track how long the buffer has been mostly empty, then let it shrink.
+	if (vertexBuffer_ && count < vertexCapacity_ / 4 && vertexCapacity_ > kMinVertexCapacity)
+		++underusedFrames_;
+	else
+		underusedFrames_ = 0;
+
+	if (!vertexBuffer_ || count > vertexCapacity_ || underusedFrames_ > kShrinkAfterFrames) {
+		if (vertexBuffer_) {
+			gs_vertexbuffer_destroy(vertexBuffer_);
+			vertexBuffer_ = nullptr;
+		}
+		vertexCapacity_ = std::max(kMinVertexCapacity, count + count / 2);
+		underusedFrames_ = 0;
+
+		// The buffer takes ownership of this and frees it with bfree().
+		gs_vb_data *data = gs_vbdata_create();
+		data->num = vertexCapacity_;
+		data->points = static_cast<vec3 *>(bzalloc(sizeof(vec3) * vertexCapacity_));
+		data->colors = static_cast<uint32_t *>(bzalloc(sizeof(uint32_t) * vertexCapacity_));
+		data->num_tex = 1;
+		data->tvarray = static_cast<gs_tvertarray *>(bzalloc(sizeof(gs_tvertarray)));
+		data->tvarray[0].width = 2;
+		data->tvarray[0].array = bzalloc(sizeof(vec2) * vertexCapacity_);
+
+		vertexBuffer_ = gs_vertexbuffer_create(data, GS_DYNAMIC);
+		if (!vertexBuffer_) {
+			vertexCapacity_ = 0;
+			return false;
+		}
+	}
+
+	gs_vb_data *data = gs_vertexbuffer_get_data(vertexBuffer_);
+	if (!data || !data->points || !data->colors || !data->tvarray || !data->tvarray[0].array)
+		return false;
+
+	memcpy(data->points, points_.data(), sizeof(vec3) * count);
+	memcpy(data->colors, colors_.data(), sizeof(uint32_t) * count);
+	memcpy(data->tvarray[0].array, texcoords_.data(), sizeof(vec2) * count);
+	gs_vertexbuffer_flush(vertexBuffer_);
+	return true;
+}
+
+void AtomRenderer::drawAtoms(const AtomSystem &system)
+{
 	gs_effect_t *effect = atomEffect();
 	if (!effect)
 		return;
 
 	const AtomDesign &design = system.config().design;
-	if (layerIndex >= design.layers.size())
-		return;
-
-	const AtomLayer &layer = design.layers[layerIndex];
-	const std::vector<Atom> &atoms = system.atoms();
-	const DesignEvaluator &evaluator = system.evaluator();
-
-	if (layer.trail.enabled)
-		renderTrails(system, layer, indices);
-
-	// Glow first, so the atom core stays crisp on top of it.
-	if (layer.bloom.amount > 1e-3f) {
-		gs_texture_t *glow =
-			SpriteCache::instance().texture("soft_circle", bloomSpriteParams(layer.bloom), std::string());
-		setBlend(true);
-		drawWithTexture(effect, glow, [&] {
-			for (const size_t index : indices) {
-				const AtomVisual visual = evaluator.evaluate(atoms[index]);
-				if (visual.bloomAlpha <= 0.002f || visual.bloomSize <= 0.0f)
-					continue;
-				emitQuad(visual.position, visual.bloomSize, 0.0f, visual.bloomColor.toRGBA());
-			}
-		});
-	}
-
-	gs_texture_t *texture = SpriteCache::instance().texture(layer.spriteId, layer.spriteParams, layer.imagePath);
-	setBlend(layer.blendId == "additive");
-	drawWithTexture(effect, texture, [&] {
-		for (const size_t index : indices) {
-			const AtomVisual visual = evaluator.evaluate(atoms[index]);
-			if (visual.color.a <= 0.002f || visual.size <= 0.0f)
-				continue;
-			emitQuad(visual.position, visual.size, visual.rotation, visual.color.toRGBA(), visual.u0,
-				 visual.v0, visual.u1, visual.v1);
-		}
-	});
-}
-
-void AtomRenderer::drawAtoms(const AtomSystem &system)
-{
-	const AtomDesign &design = system.config().design;
 	const std::vector<Atom> &atoms = system.atoms();
 
 	buckets_.resize(design.layers.size());
-	for (std::vector<size_t> &bucket : buckets_)
+	for (std::vector<uint32_t> &bucket : buckets_)
 		bucket.clear();
 
 	for (size_t i = 0; i < atoms.size(); ++i) {
 		const size_t layer = atoms[i].layer;
 		if (layer < buckets_.size())
-			buckets_[layer].push_back(i);
+			buckets_[layer].push_back(static_cast<uint32_t>(i));
 	}
 
+	// Every layer's geometry goes into one buffer and one upload; the draws below are just
+	// ranges of it. Layers still draw in order, each as trails, then glow, then the atoms.
+	points_.clear();
+	texcoords_.clear();
+	colors_.clear();
+	draws_.resize(buckets_.size());
 	for (size_t i = 0; i < buckets_.size(); ++i)
-		renderLayer(system, i, buckets_[i]);
+		stageLayer(system, i, buckets_[i], draws_[i]);
+
+	if (!uploadVertices())
+		return;
+
+	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+	gs_load_vertexbuffer(vertexBuffer_);
+	gs_load_indexbuffer(nullptr);
+
+	for (size_t i = 0; i < draws_.size(); ++i) {
+		const LayerDraw &draw = draws_[i];
+		if (draw.trailCount + draw.glowCount + draw.coreCount == 0)
+			continue;
+
+		const AtomLayer &layer = design.layers[i];
+		const bool additive = layer.blendId == "additive";
+		gs_texture_t *sprite =
+			SpriteCache::instance().texture(layer.spriteId, layer.spriteParams, layer.imagePath);
+
+		setBlend(additive);
+		drawRange(effect, image, sprite, draw.trailStart, draw.trailCount);
+
+		if (draw.glowCount > 0) {
+			gs_texture_t *glow = SpriteCache::instance().texture(
+				"soft_circle", bloomSpriteParams(layer.bloom), std::string());
+			setBlend(true);
+			drawRange(effect, image, glow, draw.glowStart, draw.glowCount);
+		}
+
+		setBlend(additive);
+		drawRange(effect, image, sprite, draw.coreStart, draw.coreCount);
+	}
+
+	gs_load_vertexbuffer(nullptr);
 }
 
 AtomRenderer::~AtomRenderer()
@@ -292,6 +374,17 @@ AtomRenderer::~AtomRenderer()
 }
 
 void AtomRenderer::releaseBuffers()
+{
+	if (vertexBuffer_) {
+		gs_vertexbuffer_destroy(vertexBuffer_);
+		vertexBuffer_ = nullptr;
+	}
+	vertexCapacity_ = 0;
+	underusedFrames_ = 0;
+	releaseBloomBuffers();
+}
+
+void AtomRenderer::releaseBloomBuffers()
 {
 	if (scene_) {
 		gs_texrender_destroy(scene_);
@@ -472,7 +565,7 @@ void AtomRenderer::render(const AtomSystem &system)
 			return;
 		// Buffers unavailable: fall through and draw straight to the target.
 	} else if (scene_) {
-		releaseBuffers();
+		releaseBloomBuffers();
 	}
 
 	gs_blend_state_push();

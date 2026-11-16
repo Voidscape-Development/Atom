@@ -33,13 +33,15 @@ bool splitTarget(const std::string &target, std::string &table, std::string &par
 	return true;
 }
 
-double applyMode(const std::string &modeId, double current, float control, float amount)
+template<typename T> bool findField(const FieldTable<T> &fields, const std::string &id, size_t &index)
 {
-	if (modeId == "multiply")
-		return current * static_cast<double>(lerp(1.0f, amount, control));
-	if (modeId == "replace")
-		return static_cast<double>(lerp(static_cast<float>(current), amount, control));
-	return current + static_cast<double>(amount * control);
+	for (size_t i = 0; i < fields.size(); ++i) {
+		if (fields[i].spec.id == id) {
+			index = i;
+			return true;
+		}
+	}
+	return false;
 }
 
 bool sameRoutes(const std::vector<ModulationRoute> &a, const std::vector<ModulationRoute> &b)
@@ -72,13 +74,33 @@ float AudioLevels::band(const std::string &id) const
 ModulationEngine::ModulationEngine() = default;
 ModulationEngine::~ModulationEngine() = default;
 
+ModulationEngine::Target ModulationEngine::resolveTarget(const std::string &id)
+{
+	Target target;
+	std::string table;
+	std::string param;
+	if (!splitTarget(id, table, param))
+		return target;
+
+	// Anything that is not emission or physics is looked up in the render table.
+	if (table == "emission") {
+		if (findField(emissionFields(), param, target.field))
+			target.table = Table::Emission;
+	} else if (table == "physics") {
+		if (findField(physicsFields(), param, target.field))
+			target.table = Table::Physics;
+	} else if (findField(renderFields(), param, target.field)) {
+		target.table = Table::Render;
+	}
+	return target;
+}
+
 void ModulationEngine::setRoutes(const std::vector<ModulationRoute> &routes)
 {
 	// Amount and smoothing can change without rebuilding anything, which matters because the
 	// designer writes the whole config back on every slider move.
 	const bool rebuild = !sameRoutes(routes_, routes);
 	routes_ = routes;
-
 	if (!rebuild)
 		return;
 
@@ -88,52 +110,87 @@ void ModulationEngine::setRoutes(const std::vector<ModulationRoute> &routes)
 
 	for (size_t i = 0; i < routes_.size(); ++i) {
 		const ModulationRoute &route = routes_[i];
+		states_[i].target = resolveTarget(route.target);
 		states_[i].modulator = ModulatorRegistry::instance().create(route.modulatorId);
 		if (!states_[i].modulator)
 			continue;
-
 		ParamBag params = route.modulatorParams;
 		params.applyDefaults(ModulatorRegistry::instance().schemaFor(route.modulatorId));
 		states_[i].modulator->configure(params);
 	}
 }
 
+bool ModulationEngine::active() const
+{
+	for (const ModulationRoute &route : routes_) {
+		if (route.enabled && !route.target.empty())
+			return true;
+	}
+	return false;
+}
+
 bool ModulationEngine::apply(const EmitterConfig &base, const ModContext &context, EmitterConfig &out)
 {
-	if (routes_.empty())
-		return false;
-
-	bool any = false;
-	for (const ModulationRoute &route : routes_) {
-		if (route.enabled && !route.target.empty()) {
-			any = true;
-			break;
-		}
-	}
-	if (!any)
+	if (!active())
 		return false;
 
 	out = base;
+	return applyInPlace(base, context, out);
+}
 
-	// One bag per table; routes address parameters by id, so nothing here knows what a gravity
-	// or a rate is.
-	ParamBag emission = toBag(out.emission, emissionFields());
-	ParamBag physics = toBag(out.physics, physicsFields());
-	ParamBag render = toBag(out.render, renderFields());
+bool ModulationEngine::applyInPlace(const EmitterConfig &base, const ModContext &context, EmitterConfig &live)
+{
+	if (!active())
+		return false;
+
+	const auto read = [](const EmitterConfig &config, const Target &target) -> Value {
+		switch (target.table) {
+		case Table::Emission:
+			return emissionFields()[target.field].get(config.emission);
+		case Table::Physics:
+			return physicsFields()[target.field].get(config.physics);
+		case Table::Render:
+			return renderFields()[target.field].get(config.render);
+		case Table::None:
+			break;
+		}
+		return Value(0.0);
+	};
+	const auto write = [](EmitterConfig &config, const Target &target, const Value &value) {
+		switch (target.table) {
+		case Table::Emission:
+			emissionFields()[target.field].set(config.emission, value);
+			break;
+		case Table::Physics:
+			physicsFields()[target.field].set(config.physics, value);
+			break;
+		case Table::Render:
+			renderFields()[target.field].set(config.render, value);
+			break;
+		case Table::None:
+			break;
+		}
+	};
+
+	const size_t count = std::min(routes_.size(), states_.size());
+
+	// Back to the saved values first, so several routes on one parameter stack on the baseline
+	// rather than on last frame's result.
+	for (size_t i = 0; i < count; ++i) {
+		const Target &target = states_[i].target;
+		if (target.table != Table::None)
+			write(live, target, read(base, target));
+	}
 
 	values_.assign(routes_.size(), 0.0f);
 
-	for (size_t i = 0; i < routes_.size(); ++i) {
-		if (i >= states_.size())
-			break;
-
+	for (size_t i = 0; i < count; ++i) {
 		const ModulationRoute &route = routes_[i];
 		RouteState &state = states_[i];
 		if (!route.enabled || !state.modulator)
 			continue;
 
 		float control = saturate(state.modulator->value(context));
-
 		if (route.smoothing > 1e-4f && context.dt > 0.0f) {
 			// Exponential approach, so the same smoothing feels the same at any frame rate.
 			const float alpha = 1.0f - std::exp(-context.dt / route.smoothing);
@@ -145,26 +202,23 @@ bool ModulationEngine::apply(const EmitterConfig &base, const ModContext &contex
 		control = state.smoothed;
 		values_[i] = control;
 
-		std::string table;
-		std::string param;
-		if (!splitTarget(route.target, table, param))
+		if (state.target.table == Table::None)
 			continue;
 
-		ParamBag *bag = table == "emission" ? &emission : (table == "physics" ? &physics : &render);
-		const Value *current = bag->find(param);
-		if (!current)
-			continue;
+		const Value current = read(live, state.target);
+		const double value = detail::asDouble(current);
+		double updated = value + static_cast<double>(route.amount * control);
+		if (route.modeId == "multiply")
+			updated = value * static_cast<double>(lerp(1.0f, route.amount, control));
+		else if (route.modeId == "replace")
+			updated = static_cast<double>(lerp(static_cast<float>(value), route.amount, control));
 
-		const double updated = applyMode(route.modeId, detail::asDouble(*current), control, route.amount);
-		if (std::get_if<int64_t>(current))
-			bag->set(param, static_cast<int64_t>(updated));
+		if (std::get_if<int64_t>(&current))
+			write(live, state.target, Value(static_cast<int64_t>(updated)));
 		else
-			bag->set(param, updated);
+			write(live, state.target, Value(updated));
 	}
 
-	fromBag(out.emission, emission, emissionFields());
-	fromBag(out.physics, physics, physicsFields());
-	fromBag(out.render, render, renderFields());
 	return true;
 }
 

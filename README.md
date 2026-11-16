@@ -135,6 +135,17 @@ cmake -B build-tests -DATOM_BUILD_TESTS=ON \
 cmake --build build-tests --target atom-core-tests && ./build-tests/atom-core-tests
 ```
 
+The same option builds `atom-core-bench`, which prints the per-frame cost of the simulation, the
+design evaluator and modulation for a stress emitter and every built-in preset, plus a checksum of
+what was simulated. Run it in a release configuration before and after touching a hot path: the
+timings show what the change bought, and an unchanged checksum shows the atoms still do the same
+thing.
+
+```sh
+cmake -B build-bench -DATOM_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-bench --target atom-core-bench && ./build-bench/atom-core-bench
+```
+
 The build scripts in `.github/scripts` and the workflows in `.github/workflows` come from the
 template and build the plugin on all three platforms.
 

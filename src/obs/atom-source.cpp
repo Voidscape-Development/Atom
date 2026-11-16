@@ -43,9 +43,11 @@ struct EmitterSource {
 	ModulationEngine modulation;
 	AudioMeter audio;
 
-	/// Configuration as saved. Modulation produces a per-frame variant of this.
+	/// Configuration as saved. Modulation is applied on top of it, straight into the system's
+	/// live configuration.
 	EmitterConfig base;
-	EmitterConfig modulated;
+	/// `base.scene.sources` split into names once per configuration instead of once per frame.
+	std::vector<std::string> trackedNames;
 
 	/// Bursts requested by a hotkey, the proc handler or obs-websocket since the last tick.
 	int pendingBursts = 0;
@@ -377,6 +379,7 @@ const char *emitterGetName(void *)
 void applyConfiguration(EmitterSource *emitter, const EmitterConfig &config)
 {
 	emitter->base = config;
+	emitter->trackedNames = splitNames(config.scene.sources);
 	emitter->modulation.setRoutes(config.modulation);
 	emitter->audio.setEnvelope(config.audio.attack, config.audio.release, config.audio.gain);
 	emitter->audio.attach(config.audio.sourceName);
@@ -480,8 +483,10 @@ void emitterTick(void *data, float seconds)
 
 		walk.trackAll = config.scene.trackAll;
 		walk.padding = config.scene.padding;
-		walk.names = splitNames(config.scene.sources);
-		walk.wantObjects = walk.trackAll || !walk.names.empty();
+		walk.wantObjects = walk.trackAll || !emitter->trackedNames.empty();
+		// Only pay for the copy when a scene walk is actually going to happen.
+		if (walk.wantObjects && !walk.trackAll)
+			walk.names = emitter->trackedNames;
 	}
 
 	walk.targetName = targetName.empty() ? nullptr : targetName.c_str();
@@ -498,8 +503,8 @@ void emitterTick(void *data, float seconds)
 	modContext.dt = seconds;
 	modContext.audio = emitter->audio.levels();
 
-	if (emitter->modulation.apply(emitter->base, modContext, emitter->modulated))
-		emitter->system.setModulatedConfig(emitter->modulated);
+	emitter->system.updateValues(
+		[&](EmitterConfig &live) { return emitter->modulation.applyInPlace(emitter->base, modContext, live); });
 
 	SimContext context;
 	if (walk.foundTarget) {
@@ -513,7 +518,7 @@ void emitterTick(void *data, float seconds)
 		emitter->pendingBursts = 0;
 	}
 
-	emitter->system.update(seconds, context);
+	emitter->system.update(seconds, std::move(context));
 }
 
 void emitterRender(void *data, gs_effect_t *effect)
