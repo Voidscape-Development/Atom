@@ -138,9 +138,9 @@ frontend API are required (both are on by default) because of the designer windo
 
 | Platform | Tooling |
 |---|---|
-| Windows | Visual Studio 17 2022, CMake 3.30.5 |
-| macOS | Xcode 16, CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3, `ninja-build`, `pkg-config`, `build-essential` |
+| Windows | Visual Studio 18 2026, CMake 3.30.5 |
+| macOS | Xcode 26.5, CMake 3.30.5 |
+| Ubuntu 26.04 | CMake 3.28.3, `ninja-build`, `pkg-config`, `build-essential` |
 
 ```sh
 cmake --preset ubuntu-x86_64      # or windows-x64 / macos
