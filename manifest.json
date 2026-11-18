@@ -1,0 +1,18 @@
+{
+    "display_name": "Atom",
+    "id": "1d6c7257-ce41-4c27-bcb8-a9dfc8c2baca",
+    "version": "0.1.0",
+    "authors": [
+        "Voidscape Development"
+    ],
+    "name": "atom",
+    "description": "Particles for OBS Studio: an Atom Emitter source and an Atom Designer window.",
+    "long_description": "Atom is an OBS Studio plugin for atoms — particles — and what you can do with them on stream. It adds an Atom Emitter source plus an Atom Designer window for building the look and the motion of an effect, with a live preview and a preset browser.",
+    "urls": {
+        "repository": "https://github.com/Voidscape-Development/Atom",
+        "website": "https://github.com/Voidscape-Development/Atom",
+        "support": "https://github.com/Voidscape-Development/Atom/issues"
+    },
+    "has_banner": false,
+    "has_icon": false
+}
