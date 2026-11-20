@@ -305,7 +305,7 @@ bool AtomRenderer::uploadVertices()
 	return true;
 }
 
-void AtomRenderer::drawAtoms(const AtomSystem &system)
+void AtomRenderer::drawAtoms(const AtomSystem &system, Pass pass)
 {
 	gs_effect_t *effect = atomEffect();
 	if (!effect)
@@ -330,8 +330,13 @@ void AtomRenderer::drawAtoms(const AtomSystem &system)
 	texcoords_.clear();
 	colors_.clear();
 	draws_.resize(buckets_.size());
-	for (size_t i = 0; i < buckets_.size(); ++i)
-		stageLayer(system, i, buckets_[i], draws_[i]);
+	for (size_t i = 0; i < buckets_.size(); ++i) {
+		const bool behind = design.layers[i].placementId == "behind";
+		if (pass == Pass::All || behind == (pass == Pass::Behind))
+			stageLayer(system, i, buckets_[i], draws_[i]);
+		else
+			draws_[i] = LayerDraw{};
+	}
 
 	if (!uploadVertices())
 		return;
@@ -425,8 +430,12 @@ bool AtomRenderer::ensureBuffers(uint32_t width, uint32_t height, uint32_t bloom
 	return scene_ && bloomA_ && bloomB_;
 }
 
-bool AtomRenderer::renderWithBloom(const AtomSystem &system, uint32_t width, uint32_t height)
+bool AtomRenderer::renderWithBloom(const AtomSystem &system, Pass pass, float margin)
 {
+	const uint32_t pad = static_cast<uint32_t>(std::max(0.0f, margin)) * 2;
+	const uint32_t width = system.config().emission.width + pad;
+	const uint32_t height = system.config().emission.height + pad;
+
 	gs_effect_t *effect = atomEffect();
 	if (!effect)
 		return false;
@@ -451,11 +460,12 @@ bool AtomRenderer::renderWithBloom(const AtomSystem &system, uint32_t width, uin
 		struct vec4 clear;
 		vec4_zero(&clear);
 		gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
-		gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+		gs_ortho(-margin, static_cast<float>(width) - margin, -margin, static_cast<float>(height) - margin,
+			 -100.0f, 100.0f);
 
 		gs_blend_state_push();
 		gs_enable_blending(true);
-		drawAtoms(system);
+		drawAtoms(system, pass);
 		gs_blend_state_pop();
 
 		gs_texrender_end(scene_);
@@ -527,7 +537,10 @@ bool AtomRenderer::renderWithBloom(const AtomSystem &system, uint32_t width, uin
 		std::swap(source, destination);
 	}
 
-	// 4. Composite: the atoms as they were, then the blurred highlights added on top.
+	// 4. Composite: the atoms as they were, then the blurred highlights added on top. The
+	//    buffers start `margin` up and left of the emitter's origin.
+	gs_matrix_push();
+	gs_matrix_translate3f(-margin, -margin, 0.0f);
 	gs_blend_state_push();
 	gs_enable_blending(true);
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
@@ -543,11 +556,12 @@ bool AtomRenderer::renderWithBloom(const AtomSystem &system, uint32_t width, uin
 			gs_draw_sprite(bloom, 0, width, height);
 	}
 	gs_blend_state_pop();
+	gs_matrix_pop();
 
 	return true;
 }
 
-void AtomRenderer::render(const AtomSystem &system)
+void AtomRenderer::render(const AtomSystem &system, Pass pass, float margin)
 {
 	if (!atomEffect())
 		return;
@@ -559,9 +573,7 @@ void AtomRenderer::render(const AtomSystem &system)
 
 	const RenderConfig &render = system.config().render;
 	if (render.usesPostBloom()) {
-		const uint32_t width = system.config().emission.width;
-		const uint32_t height = system.config().emission.height;
-		if (renderWithBloom(system, width, height))
+		if (renderWithBloom(system, pass, margin))
 			return;
 		// Buffers unavailable: fall through and draw straight to the target.
 	} else if (scene_) {
@@ -570,7 +582,7 @@ void AtomRenderer::render(const AtomSystem &system)
 
 	gs_blend_state_push();
 	gs_enable_blending(true);
-	drawAtoms(system);
+	drawAtoms(system, pass);
 	gs_blend_state_pop();
 }
 

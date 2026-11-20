@@ -23,6 +23,21 @@ show a gradient, a curve and a live preview at once, and one editor cannot disag
 | **Atom Design** | Color, bloom, size, trail and fade path per atom layer — see below. |
 | **Atom Physics** | Gravity and gravity direction, initial speed, emit angle and spread, drag, turbulence, lifetime and lifetime falloff, spin, destination endpoint, and per-atom offsets. |
 
+### Atom Filter
+
+Add **Atom Filter** to any video source (a webcam, an image, a game capture) to run a full Atom
+effect around it. It is the same emitter and the same designer, with three differences:
+
+* **Fitted to the source.** The emitter is always the source's own size, following it live, so
+  *source edges*, *bounding box*, *ring* and every other shape wrap the source itself.
+* **Behind or in front.** Each kind of atom chooses *Draw: behind the source* or *in front of the
+  source*, so smoke can rise from behind a webcam while sparks fly over it.
+* **Margin.** The filter's property page has a margin that grows the output on every side, so
+  atoms can travel out past the source's edges instead of being clipped to them.
+
+Filters have no scene position of their own, so scene collision and "a source in the scene"
+destinations are not available on them.
+
 ### Atom Physics
 
 * **Gravity** — positive falls, negative rises like embers or smoke.
@@ -96,7 +111,8 @@ in the setting's own units how far it will move.
                      "requestData": { "source": "My Emitter", "count": 200 } } }
   ```
 
-  Requests: `burst`, `reset`, `set_emitting`, `status`.
+  Requests: `burst`, `reset`, `set_emitting`, `status`. To address an Atom Filter, add
+  `"filter": "<filter name>"` with `source` set to the source it is on.
 
 ### Presets
 

@@ -102,6 +102,10 @@ obs_properties_t *buildEmitterProperties(obs_source_t *self)
 	obs_properties_add_button2(props, "open_designer", obs_module_text("Atom.OpenDesigner"), onOpenDesigner, self);
 	obs_properties_add_button2(props, "reset_emitter", obs_module_text("Atom.ResetEmitter"), onResetEmitter, self);
 
+	if (self && obs_source_get_type(self) == OBS_SOURCE_TYPE_FILTER)
+		obs_properties_add_int_slider(props, "filter_margin", obs_module_text("Atom.Filter.Margin"), 0, 1024,
+					      1);
+
 	return props;
 }
 

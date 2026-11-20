@@ -49,6 +49,11 @@ struct EmitterSource {
 	/// `base.scene.sources` split into names once per configuration instead of once per frame.
 	std::vector<std::string> trackedNames;
 
+	/// Atom Filter: the emitter fits the filtered source and draws around / on top of it.
+	bool filter = false;
+	/// Filter only: extra pixels on every side of the source the atoms may draw into.
+	float margin = 0.0f;
+
 	/// Bursts requested by a hotkey, the proc handler or obs-websocket since the last tick.
 	int pendingBursts = 0;
 	float time = 0.0f;
@@ -71,17 +76,40 @@ EmitterSource *lookup(obs_source_t *source)
 	return it == g_instances.end() ? nullptr : it->second;
 }
 
-/// Finds an emitter by source name. Used by the trigger commands, which address sources the way a
-/// hotkey or a websocket client would.
-EmitterSource *lookupByName(const std::string &name)
+/// Finds an emitter by source name, or an Atom Filter by its own name on the source called `name`.
+/// Used by the trigger commands, which address sources the way a hotkey or a websocket client would.
+EmitterSource *lookupByName(const std::string &name, const std::string &filterName)
 {
 	std::lock_guard<std::mutex> lock(g_instancesMutex);
 	for (const auto &entry : g_instances) {
-		const char *sourceName = obs_source_get_name(entry.first);
-		if (sourceName && name == sourceName)
+		if (entry.second->filter != !filterName.empty())
+			continue;
+		obs_source_t *owner = entry.second->filter ? obs_filter_get_parent(entry.first) : entry.first;
+		const char *ownerName = owner ? obs_source_get_name(owner) : nullptr;
+		const char *ownName = obs_source_get_name(entry.first);
+		if (ownerName && name == ownerName && (filterName.empty() || (ownName && filterName == ownName)))
 			return entry.second;
 	}
 	return nullptr;
+}
+
+/// Base size of the source an Atom Filter is applied to, or false when there is none yet.
+bool filterTargetSize(obs_source_t *filter, uint32_t &width, uint32_t &height)
+{
+	obs_source_t *target = obs_filter_get_target(filter);
+	width = target ? obs_source_get_base_width(target) : 0;
+	height = target ? obs_source_get_base_height(target) : 0;
+	return width > 0 && height > 0;
+}
+
+/// A filter's emitter always covers its source exactly; the stored width/height are ignored.
+void fitToTarget(obs_source_t *source, EmitterConfig &config)
+{
+	uint32_t width = 0, height = 0;
+	if (obs_source_get_type(source) == OBS_SOURCE_TYPE_FILTER && filterTargetSize(source, width, height)) {
+		config.emission.width = width;
+		config.emission.height = height;
+	}
 }
 
 std::vector<std::string> splitNames(const std::string &list)
@@ -379,11 +407,12 @@ const char *emitterGetName(void *)
 void applyConfiguration(EmitterSource *emitter, const EmitterConfig &config)
 {
 	emitter->base = config;
+	fitToTarget(emitter->source, emitter->base);
 	emitter->trackedNames = splitNames(config.scene.sources);
 	emitter->modulation.setRoutes(config.modulation);
 	emitter->audio.setEnvelope(config.audio.attack, config.audio.release, config.audio.gain);
 	emitter->audio.attach(config.audio.sourceName);
-	emitter->system.configure(config);
+	emitter->system.configure(emitter->base);
 }
 
 void *emitterCreate(obs_data_t *settings, obs_source_t *source)
@@ -392,6 +421,8 @@ void *emitterCreate(obs_data_t *settings, obs_source_t *source)
 
 	EmitterSource *emitter = new EmitterSource();
 	emitter->source = source;
+	emitter->filter = obs_source_get_type(source) == OBS_SOURCE_TYPE_FILTER;
+	emitter->margin = static_cast<float>(obs_data_get_int(settings, "filter_margin"));
 	applyConfiguration(emitter, serialize::configFromData(settings));
 	registerTriggers(emitter, source);
 
@@ -430,6 +461,7 @@ void emitterUpdate(void *data, obs_data_t *settings)
 	const EmitterConfig config = serialize::configFromData(settings);
 
 	std::lock_guard<std::mutex> lock(emitter->mutex);
+	emitter->margin = static_cast<float>(obs_data_get_int(settings, "filter_margin"));
 	applyConfiguration(emitter, config);
 }
 
@@ -449,19 +481,27 @@ uint32_t emitterWidth(void *data)
 {
 	EmitterSource *emitter = static_cast<EmitterSource *>(data);
 	std::lock_guard<std::mutex> lock(emitter->mutex);
-	return emitter->system.config().emission.width;
+	return emitter->system.config().emission.width + static_cast<uint32_t>(emitter->margin) * 2;
 }
 
 uint32_t emitterHeight(void *data)
 {
 	EmitterSource *emitter = static_cast<EmitterSource *>(data);
 	std::lock_guard<std::mutex> lock(emitter->mutex);
-	return emitter->system.config().emission.height;
+	return emitter->system.config().emission.height + static_cast<uint32_t>(emitter->margin) * 2;
 }
 
 void emitterTick(void *data, float seconds)
 {
 	EmitterSource *emitter = static_cast<EmitterSource *>(data);
+
+	// A filter follows its source's size; resizing keeps live atoms, so this is cheap.
+	uint32_t targetWidth = 0, targetHeight = 0;
+	if (emitter->filter && filterTargetSize(emitter->source, targetWidth, targetHeight)) {
+		std::lock_guard<std::mutex> lock(emitter->mutex);
+		if (targetWidth != emitter->base.emission.width || targetHeight != emitter->base.emission.height)
+			applyConfiguration(emitter, emitter->base);
+	}
 
 	// Walking OBS' scene list touches OBS locks, so it happens between our own locks rather
 	// than under them.
@@ -490,7 +530,8 @@ void emitterTick(void *data, float seconds)
 	}
 
 	walk.targetName = targetName.empty() ? nullptr : targetName.c_str();
-	if (walk.targetName || walk.wantObjects)
+	// A filter is not a scene item of its own, so it has nothing to resolve in a scene.
+	if (!emitter->filter && (walk.targetName || walk.wantObjects))
 		resolveScene(walk);
 
 	std::lock_guard<std::mutex> lock(emitter->mutex);
@@ -530,6 +571,31 @@ void emitterRender(void *data, gs_effect_t *effect)
 	emitter->renderer.render(emitter->system);
 }
 
+void filterRender(void *data, gs_effect_t *effect)
+{
+	(void)effect;
+	EmitterSource *emitter = static_cast<EmitterSource *>(data);
+	obs_source_t *target = obs_filter_get_target(emitter->source);
+	if (!target || !obs_source_process_filter_begin(emitter->source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+		return;
+
+	std::lock_guard<std::mutex> lock(emitter->mutex);
+	const float margin = emitter->margin;
+	gs_matrix_push();
+	gs_matrix_translate3f(margin, margin, 0.0f);
+	emitter->renderer.render(emitter->system, AtomRenderer::Pass::Behind, margin);
+	obs_source_process_filter_end(emitter->source, obs_get_base_effect(OBS_EFFECT_DEFAULT),
+				      obs_source_get_base_width(target), obs_source_get_base_height(target));
+	emitter->renderer.render(emitter->system, AtomRenderer::Pass::Front, margin);
+	gs_matrix_pop();
+}
+
+void filterDefaults(obs_data_t *settings)
+{
+	emitterDefaults(settings);
+	obs_data_set_default_int(settings, "filter_margin", 64);
+}
+
 obs_source_info makeEmitterInfo()
 {
 	obs_source_info info = {};
@@ -550,12 +616,28 @@ obs_source_info makeEmitterInfo()
 	return info;
 }
 
+obs_source_info makeFilterInfo()
+{
+	obs_source_info info = makeEmitterInfo();
+	info.id = kFilterSourceId;
+	info.type = OBS_SOURCE_TYPE_FILTER;
+	info.output_flags = OBS_SOURCE_VIDEO;
+	info.get_name = [](void *) {
+		return obs_module_text("Atom.Filter");
+	};
+	info.get_defaults = filterDefaults;
+	info.video_render = filterRender;
+	return info;
+}
+
 } // namespace
 
 void registerEmitterSource()
 {
 	static obs_source_info info = makeEmitterInfo();
+	static obs_source_info filterInfo = makeFilterInfo();
 	obs_register_source(&info);
+	obs_register_source(&filterInfo);
 }
 
 void sourceResetRequested(obs_source_t *source)
@@ -576,6 +658,7 @@ EmitterConfig configOfSource(obs_source_t *source)
 	obs_data_t *settings = obs_source_get_settings(source);
 	EmitterConfig config = serialize::configFromData(settings);
 	obs_data_release(settings);
+	fitToTarget(source, config);
 	return config;
 }
 
@@ -592,9 +675,9 @@ void applyConfigToSource(obs_source_t *source, const EmitterConfig &config)
 	obs_data_release(settings);
 }
 
-bool sourceBurst(const std::string &sourceName, int count)
+bool sourceBurst(const std::string &sourceName, const std::string &filterName, int count)
 {
-	EmitterSource *emitter = lookupByName(sourceName);
+	EmitterSource *emitter = lookupByName(sourceName, filterName);
 	if (!emitter)
 		return false;
 
@@ -602,9 +685,9 @@ bool sourceBurst(const std::string &sourceName, int count)
 	return true;
 }
 
-bool sourceReset(const std::string &sourceName)
+bool sourceReset(const std::string &sourceName, const std::string &filterName)
 {
-	EmitterSource *emitter = lookupByName(sourceName);
+	EmitterSource *emitter = lookupByName(sourceName, filterName);
 	if (!emitter)
 		return false;
 
@@ -613,9 +696,9 @@ bool sourceReset(const std::string &sourceName)
 	return true;
 }
 
-bool sourceSetEmitting(const std::string &sourceName, bool emitting)
+bool sourceSetEmitting(const std::string &sourceName, const std::string &filterName, bool emitting)
 {
-	EmitterSource *emitter = lookupByName(sourceName);
+	EmitterSource *emitter = lookupByName(sourceName, filterName);
 	if (!emitter)
 		return false;
 
@@ -624,9 +707,9 @@ bool sourceSetEmitting(const std::string &sourceName, bool emitting)
 	return true;
 }
 
-bool sourceStatus(const std::string &sourceName, int &atoms, bool &emitting)
+bool sourceStatus(const std::string &sourceName, const std::string &filterName, int &atoms, bool &emitting)
 {
-	EmitterSource *emitter = lookupByName(sourceName);
+	EmitterSource *emitter = lookupByName(sourceName, filterName);
 	if (!emitter)
 		return false;
 

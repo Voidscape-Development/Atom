@@ -28,6 +28,8 @@ namespace atom {
 
 /// Source id of the Atom Emitter.
 constexpr const char *kEmitterSourceId = "atom_emitter";
+/// Source id of the Atom Filter: an emitter fitted to, and drawn around, the source it filters.
+constexpr const char *kFilterSourceId = "atom_filter";
 
 void registerEmitterSource();
 
@@ -44,10 +46,11 @@ void applyConfigToSource(obs_source_t *source, const EmitterConfig &config);
 ///
 /// Hotkeys, the source's own proc handler and the obs-websocket vendor all funnel through these,
 /// so every entry point behaves identically. `count` of 0 means "the configured burst size".
+/// A non-empty `filterName` addresses the Atom Filter of that name on `sourceName` instead.
 /// Each returns false when no emitter by that name exists.
-bool sourceBurst(const std::string &sourceName, int count);
-bool sourceReset(const std::string &sourceName);
-bool sourceSetEmitting(const std::string &sourceName, bool emitting);
-bool sourceStatus(const std::string &sourceName, int &atoms, bool &emitting);
+bool sourceBurst(const std::string &sourceName, const std::string &filterName, int count);
+bool sourceReset(const std::string &sourceName, const std::string &filterName);
+bool sourceSetEmitting(const std::string &sourceName, const std::string &filterName, bool emitting);
+bool sourceStatus(const std::string &sourceName, const std::string &filterName, int &atoms, bool &emitting);
 
 } // namespace atom
