@@ -38,10 +38,10 @@ struct VendorRequestCallbackPair {
 
 void *g_vendor = nullptr;
 
-std::string requestedSource(obs_data_t *requestData)
+std::string requestedString(obs_data_t *requestData, const char *key)
 {
-	const char *name = obs_data_get_string(requestData, "source");
-	return name ? name : "";
+	const char *value = obs_data_get_string(requestData, key);
+	return value ? value : "";
 }
 
 void finish(obs_data_t *responseData, bool ok, const char *error = nullptr)
@@ -54,31 +54,39 @@ void finish(obs_data_t *responseData, bool ok, const char *error = nullptr)
 void onBurst(obs_data_t *requestData, obs_data_t *responseData, void *)
 {
 	const int count = static_cast<int>(obs_data_get_int(requestData, "count"));
-	finish(responseData, sourceBurst(requestedSource(requestData), count), "no such Atom Emitter");
+	finish(responseData,
+	       sourceBurst(requestedString(requestData, "source"), requestedString(requestData, "filter"), count),
+	       "no such Atom Emitter or Atom Filter");
 }
 
 void onReset(obs_data_t *requestData, obs_data_t *responseData, void *)
 {
-	finish(responseData, sourceReset(requestedSource(requestData)), "no such Atom Emitter");
+	finish(responseData,
+	       sourceReset(requestedString(requestData, "source"), requestedString(requestData, "filter")),
+	       "no such Atom Emitter or Atom Filter");
 }
 
 void onSetEmitting(obs_data_t *requestData, obs_data_t *responseData, void *)
 {
 	obs_data_set_default_bool(requestData, "emitting", true);
 	const bool emitting = obs_data_get_bool(requestData, "emitting");
-	finish(responseData, sourceSetEmitting(requestedSource(requestData), emitting), "no such Atom Emitter");
+	finish(responseData,
+	       sourceSetEmitting(requestedString(requestData, "source"), requestedString(requestData, "filter"),
+				 emitting),
+	       "no such Atom Emitter or Atom Filter");
 }
 
 void onStatus(obs_data_t *requestData, obs_data_t *responseData, void *)
 {
 	int atoms = 0;
 	bool emitting = false;
-	const bool ok = sourceStatus(requestedSource(requestData), atoms, emitting);
+	const bool ok = sourceStatus(requestedString(requestData, "source"), requestedString(requestData, "filter"),
+				     atoms, emitting);
 	if (ok) {
 		obs_data_set_int(responseData, "atoms", atoms);
 		obs_data_set_bool(responseData, "emitting", emitting);
 	}
-	finish(responseData, ok, "no such Atom Emitter");
+	finish(responseData, ok, "no such Atom Emitter or Atom Filter");
 }
 
 /// obs-websocket publishes its vendor API through OBS' global proc handler, so this reaches it

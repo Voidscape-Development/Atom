@@ -91,6 +91,11 @@ Items blendItems()
 	return {{"normal", "Atom.Design.Blend.Normal"}, {"additive", "Atom.Design.Blend.Additive"}};
 }
 
+Items placementItems()
+{
+	return {{"front", "Atom.Design.Placement.Front"}, {"behind", "Atom.Design.Placement.Behind"}};
+}
+
 const FieldTable<EndpointConfig> &endpointFields()
 {
 	static const FieldTable<EndpointConfig> fields = [] {
@@ -388,6 +393,8 @@ const FieldTable<AtomLayer> &layerFields()
 					"sprite=image"));
 		f.push_back(
 			bindEnum<AtomLayer>("blend", "Atom.Design.Blend", &AtomLayer::blendId, blendItems(), "layer"));
+		f.push_back(bindEnum<AtomLayer>("placement", "Atom.Design.Placement", &AtomLayer::placementId,
+						placementItems(), "layer"));
 
 		appendNested<AtomLayer, ColorConfig>(f, colorFields(), &AtomLayer::color, "color_", "color");
 		appendNested<AtomLayer, BloomConfig>(f, bloomFields(), &AtomLayer::bloom, "bloom_", "bloom");

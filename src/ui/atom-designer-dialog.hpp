@@ -177,6 +177,9 @@ private:
 	QStringList audioSourceNames() const;
 
 	obs_weak_source_t *weakSource_ = nullptr;
+	/// Editing an Atom Filter: its size follows the filtered source, layers choose behind/in front
+	/// and there is no scene of its own to collide with.
+	bool filter_ = false;
 
 	/// Working copy; written back to the source as it is edited, or on Done.
 	EmitterConfig config_;

@@ -35,10 +35,16 @@ namespace atom {
 /// between atoms instead of only around each one.
 class AtomRenderer {
 public:
+	/// Which layers to draw: every layer, or only those placed behind / in front of a filtered
+	/// source.
+	enum class Pass { All, Behind, Front };
+
 	~AtomRenderer();
 
-	/// Must be called inside a graphics context, i.e. from the source's video_render.
-	void render(const AtomSystem &system);
+	/// Must be called inside a graphics context, i.e. from the source's video_render. `margin`
+	/// widens the drawable area by that many pixels on every side (the atoms keep their own
+	/// coordinates); the caller translates by `margin` so the emitter's origin lands inside it.
+	void render(const AtomSystem &system, Pass pass = Pass::All, float margin = 0.0f);
 
 	/// Releases everything this renderer holds on the GPU. Must be called inside a graphics
 	/// context.
@@ -59,7 +65,7 @@ private:
 		size_t coreCount = 0;
 	};
 
-	void drawAtoms(const AtomSystem &system);
+	void drawAtoms(const AtomSystem &system, Pass pass);
 	void stageLayer(const AtomSystem &system, size_t layerIndex, const std::vector<uint32_t> &indices,
 			LayerDraw &draw);
 	void stageTrails(const AtomSystem &system, const AtomLayer &layer, const std::vector<uint32_t> &indices);
@@ -73,7 +79,7 @@ private:
 	void releaseBloomBuffers();
 	/// Draws the atoms offscreen, blooms them and composites the result. Returns false if the
 	/// buffers could not be created, in which case the caller falls back to drawing directly.
-	bool renderWithBloom(const AtomSystem &system, uint32_t width, uint32_t height);
+	bool renderWithBloom(const AtomSystem &system, Pass pass, float margin);
 	bool ensureBuffers(uint32_t width, uint32_t height, uint32_t bloomWidth, uint32_t bloomHeight);
 
 	/// Scratch buckets of atom indices per design layer, reused between frames.

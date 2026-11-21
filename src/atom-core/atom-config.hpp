@@ -229,6 +229,8 @@ struct AtomLayer {
 	std::string imagePath;
 	/// "normal" or "additive".
 	std::string blendId = "additive";
+	/// Atom Filter only: "front" draws over the filtered source, "behind" draws under it.
+	std::string placementId = "front";
 
 	ColorConfig color;
 	BloomConfig bloom;

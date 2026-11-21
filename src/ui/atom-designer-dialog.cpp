@@ -281,6 +281,7 @@ AtomDesignerDialog::AtomDesignerDialog(obs_source_t *source, QWidget *parent) : 
 	registerBuiltinModules();
 
 	weakSource_ = source ? obs_source_get_weak_source(source) : nullptr;
+	filter_ = source && obs_source_get_type(source) == OBS_SOURCE_TYPE_FILTER;
 	config_ = configOfSource(source);
 	if (config_.design.layers.empty())
 		config_.design = AtomDesign::defaultDesign();
@@ -807,7 +808,8 @@ void AtomDesignerDialog::rebuildOutline()
 		row->setText(1, config_.audio.sourceName.empty() ? text("Atom.Designer.None")
 								 : QString::fromStdString(config_.audio.sourceName));
 	}
-	addRow(reacts, text("Atom.Designer.Row.Scene"), Kind::Scene);
+	if (!filter_)
+		addRow(reacts, text("Atom.Designer.Row.Scene"), Kind::Scene);
 	for (size_t i = 0; i < config_.modulation.size(); ++i) {
 		QTreeWidgetItem *row =
 			addRow(reacts, linkLabel(config_.modulation[i]), Kind::Link, {}, {}, static_cast<int>(i));
@@ -1162,7 +1164,9 @@ void AtomDesignerDialog::buildAtomSections(AtomLayer &layer)
 		addHeaderAction(text("Atom.Designer.Remove.Atom"), [this] { removeAtom(); });
 
 	if (want("shape")) {
-		section("Atom.Designer.Part.Shape", withoutIds(byGroup(all, "layer"), {"enabled"}), writeLayer);
+		// Behind / in front only means something when there is a filtered source to draw around.
+		const ParamSchema shape = withoutIds(byGroup(all, "layer"), {"enabled"});
+		section("Atom.Designer.Part.Shape", filter_ ? shape : withoutIds(shape, {"placement"}), writeLayer);
 		addSection(text("Atom.Designer.SpriteOptions"), registrySchema(registries::kSprite, layer.spriteId),
 			   withDefaults(layer.spriteParams, registrySchema(registries::kSprite, layer.spriteId)),
 			   [this](const ParamBag &bag, const std::string &) {
@@ -1233,7 +1237,8 @@ void AtomDesignerDialog::buildEmitterSections()
 	addSection(text("Atom.Designer.Section.HowMany"), rate, bagSubset(values, rate), write, "emission");
 
 	const ParamSchema size = byGroup(all, "size");
-	addSection(text("Atom.Designer.Section.Canvas"), size, bagSubset(values, size), write);
+	if (!filter_)
+		addSection(text("Atom.Designer.Section.Canvas"), size, bagSubset(values, size), write);
 }
 
 void AtomDesignerDialog::buildLaunchSections()
