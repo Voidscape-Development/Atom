@@ -421,9 +421,13 @@ AtomPreset confetti()
 	EmitterConfig &config = preset.config;
 	config.emission.shapeId = "edge";
 	config.emission.shapeParams.set("edges", std::string("top"));
+	// A band above the top edge rather than the edge itself, so a burst falls in as a scattered
+	// cloud instead of a straight line.
+	config.emission.shapeParams.set("inset", -160.0);
+	config.emission.shapeParams.set("thickness", 160.0);
 	config.emission.modeId = "both";
 	config.emission.rate = 40.0f;
-	config.emission.burstCount = 60;
+	config.emission.burstCount = 120;
 	config.emission.burstInterval = 3.0f;
 
 	config.physics.gravity = 220.0f;
@@ -437,13 +441,14 @@ AtomPreset confetti()
 	OffsetConfig offset;
 	offset.rotation = 1.0f;
 	offset.spawnPhase = 0.5f;
+	offset.speed = 0.6f;
 
 	AtomLayer paper = makeLayer("Paper", "square",
 				    Gradient{{{0.0f, rgba(255, 80, 120)},
 					      {0.33f, rgba(255, 210, 60)},
 					      {0.66f, rgba(90, 220, 140)},
 					      {1.0f, rgba(90, 160, 255)}}},
-				    8.0f);
+				    11.0f);
 	paper.blendId = "normal";
 	paper.color.modeId = "random_stop";
 	paper.bloom.amount = 0.0f;
