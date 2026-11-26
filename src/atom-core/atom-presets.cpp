@@ -423,7 +423,7 @@ AtomPreset confetti()
 	config.emission.shapeParams.set("edges", std::string("top"));
 	config.emission.modeId = "both";
 	config.emission.rate = 40.0f;
-	config.emission.burstCount = 120;
+	config.emission.burstCount = 60;
 	config.emission.burstInterval = 3.0f;
 
 	config.physics.gravity = 220.0f;
@@ -443,7 +443,7 @@ AtomPreset confetti()
 					      {0.33f, rgba(255, 210, 60)},
 					      {0.66f, rgba(90, 220, 140)},
 					      {1.0f, rgba(90, 160, 255)}}},
-				    11.0f);
+				    8.0f);
 	paper.blendId = "normal";
 	paper.color.modeId = "random_stop";
 	paper.bloom.amount = 0.0f;

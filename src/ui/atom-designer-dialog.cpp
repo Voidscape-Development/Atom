@@ -46,6 +46,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -967,9 +968,14 @@ void AtomDesignerDialog::scheduleInspectorRebuild()
 	inspectorRebuildPending_ = true;
 	QTimer::singleShot(0, this, [this] {
 		inspectorRebuildPending_ = false;
+		// An edit rebuilds the same page, so keep the reader where they were instead of letting
+		// the shrink-and-regrow (and focus moving off the destroyed editor) scroll it.
+		QScrollBar *bar = inspectorScroll_->verticalScrollBar();
+		const int scroll = bar->value();
 		rebuildInspector();
 		if (popupRebuild_)
 			popupRebuild_();
+		QTimer::singleShot(0, bar, [bar, scroll] { bar->setValue(scroll); });
 	});
 }
 

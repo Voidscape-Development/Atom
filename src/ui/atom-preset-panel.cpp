@@ -53,8 +53,11 @@ PresetPanel::PresetPanel(QWidget *parent) : QFrame(parent)
 	setObjectName("atomPresetPanel");
 	setFrameShape(QFrame::StyledPanel);
 	setFrameShadow(QFrame::Raised);
-	setAutoFillBackground(true);
-	setBackgroundRole(QPalette::Window);
+	// OBS themes style every widget, which overrides palette fills and left this overlay see-through,
+	// so the background is painted by a stylesheet of its own.
+	setAttribute(Qt::WA_StyledBackground, true);
+	setStyleSheet("#atomPresetPanel { background-color: palette(window); border: 1px solid palette(mid);"
+		      " border-radius: 6px; }");
 
 	QLabel *title = new QLabel(text("Atom.Designer.Presets.Title"), this);
 	QFont titleFont = title->font();
